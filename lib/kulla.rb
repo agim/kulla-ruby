@@ -84,6 +84,22 @@ module Kulla
       false
     end
 
+    # Starts reporting from a long-running process that Rails doesn't treat as a server or job worker,
+    # such as a daemon run as a rake task. The Railtie already starts web servers and job processes and
+    # skips rake, console and one-off commands; call this once, after the app has loaded, in a process
+    # that should report anyway. It joins like any other process of the app (same install key), so an
+    # approved app needs no new approval. Returns true when it started.
+    def start!
+      return false unless config.enabled?
+
+      Railtie.install_subscribers(client, config) if defined?(Railtie)
+      client.start
+      true
+    rescue StandardError => e
+      log("start! failed: #{e.class}: #{e.message}")
+      false
+    end
+
     def flush
       @client&.flush
       nil

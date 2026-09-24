@@ -114,4 +114,20 @@ class EnrollmentTest < Minitest::Test
       assert_nil config.enrollment_key
     end
   end
+
+  def test_start_bang_starts_an_enabled_sdk_and_ignores_a_disabled_one
+    Kulla.instance_variable_set(:@client, nil)
+    Kulla.instance_variable_set(:@config, build_config(transport: Kulla::Transport.new(build_config, adapter: FakeAdapter.new)))
+    assert Kulla.start!
+    assert Kulla.client.worker_alive?
+    Kulla.client.stop
+
+    Kulla.instance_variable_set(:@client, nil)
+    Kulla.instance_variable_set(:@config, build_config(enabled: false))
+    refute Kulla.start!
+  ensure
+    Kulla.client&.stop
+    Kulla.instance_variable_set(:@client, nil)
+    Kulla.instance_variable_set(:@config, nil)
+  end
 end

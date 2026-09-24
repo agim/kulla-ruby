@@ -36,6 +36,23 @@ Kulla owner approves it:
 If the app's `secret_key_base` changes, it asks to join again. To skip joining, give it a token instead
 (`kulla.token` in credentials or `KULLA_TOKEN`), or set `c.enroll = false`.
 
+### Long-running rake tasks and custom daemons
+
+Web servers and job processes (Solid Queue, Sidekiq, GoodJob) report on their own. Rake tasks, the console
+and one-off commands (`rails runner`, scripts) don't. For a process that runs for a long time but isn't
+a server, for example a monitor started as a rake task under systemd, start the SDK yourself once the
+app has loaded:
+
+```ruby
+task call_monitor: :environment do
+  Kulla.start!
+  CallMonitor.run   # requests, errors, jobs and heartbeats from this process now reach Kulla
+end
+```
+
+`Kulla.start!` does nothing (and returns false) when the SDK is off. It uses the app's token, or joins with
+the same install key as the app's other processes, so an app you already approved needs no new approval.
+
 ## Configure (optional)
 
 ```ruby
