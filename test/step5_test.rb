@@ -50,23 +50,29 @@ class Step5Test < Minitest::Test
     assert_equal 1, calls, "one DNS lookup per domain per hour"
   end
 
-  def test_webhook_verifies_the_signature_and_syncs_at_once
-    secret = "s" * 32
+  def test_webhook_key_derives_from_the_token_and_deliveries_verify
+    key = Kulla::Webhook.key_for("kla_test")
+    assert_equal OpenSSL::HMAC.hexdigest("SHA256", Digest::SHA256.hexdigest("kla_test"), "kulla-webhook-v1"), key
+    assert_nil Kulla::Webhook.key_for(nil)
+
     body = JSON.generate(event: "signal.updated")
     t = Time.now.to_i
-    good = "t=#{t},v1=#{OpenSSL::HMAC.hexdigest("SHA256", secret, "#{t}.#{body}")}"
+    other = Kulla::Webhook.key_for("kla_other")
+    sig = ->(k, at = t, b = body) { OpenSSL::HMAC.hexdigest("SHA256", k, "#{at}.#{b}") }
     synced = 0
     @client.define_singleton_method(:sync_now) { synced += 1 }
-    hook = Kulla::Webhook.new(->(_) { [ 404, {}, [] ] }, client: @client, secret: secret)
-    call = ->(sig, b = body) { hook.call("PATH_INFO" => "/kulla/signals", "REQUEST_METHOD" => "POST", "HTTP_X_KULLA_SIGNATURE" => sig, "rack.input" => StringIO.new(b)).first }
+    hook = Kulla::Webhook.new(->(_) { [ 404, {}, [] ] }, client: @client) # key from @config.token = "kla_test"
+    call = ->(header, b = body) { hook.call("PATH_INFO" => "/kulla/signals", "REQUEST_METHOD" => "POST", "HTTP_X_KULLA_SIGNATURE" => header, "rack.input" => StringIO.new(b)).first }
 
-    assert_equal 204, call.(good)
+    assert_equal 204, call.("t=#{t},v1=#{sig.(other)},v1=#{sig.(key)}"), "any of the app's tokens may have signed"
     assert_equal 1, synced
-    assert_equal 401, call.("t=#{t},v1=deadbeef")
-    assert_equal 401, call.(good, body + " ")
-    stale = Time.now.to_i - 600
-    assert_equal 401, call.("t=#{stale},v1=#{OpenSSL::HMAC.hexdigest("SHA256", secret, "#{stale}.#{body}")}")
-    assert_equal 404, Kulla::Webhook.new(->(_) { [ 404, {}, [] ] }, client: @client, secret: nil).call("PATH_INFO" => "/kulla/signals", "REQUEST_METHOD" => "POST", "rack.input" => StringIO.new(body)).first
+    assert_equal 401, call.("t=#{t},v1=#{sig.(other)}")
+    assert_equal 401, call.("t=#{t},v1=#{sig.(key)}", body + " ")
+    stale = t - 600
+    assert_equal 401, call.("t=#{stale},v1=#{sig.(key, stale)}")
+    @config.token = nil
+    @config.enroll = false
+    assert_equal 404, call.("t=#{t},v1=#{sig.(key)}"), "no token yet, no webhook"
     assert_equal 1, synced
   end
 end

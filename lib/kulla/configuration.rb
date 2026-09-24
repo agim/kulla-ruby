@@ -72,12 +72,6 @@ module Kulla
       @token = presence(rails_credential(:token)) || presence(ENV["KULLA_TOKEN"])
     end
 
-    # Shared secret for Kulla's signal webhook (Kulla::Webhook); nil keeps the endpoint off.
-    attr_writer :webhook_secret
-    def webhook_secret
-      return @webhook_secret if defined?(@webhook_secret)
-      @webhook_secret = presence(rails_credential(:webhook_secret)) || presence(ENV["KULLA_WEBHOOK_SECRET"])
-    end
 
     # Where Kulla runs. No default: set it in an initializer or KULLA_URL.
     def endpoint

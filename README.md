@@ -126,10 +126,11 @@ failure counts as valid, so resolver trouble never blocks a signup.
 
 ### Signal webhook (optional; polling stays)
 
-In Kulla, App › Settings › Signal webhook takes `https://<your app>/kulla/signals`; Kulla generates a
-secret (shown once). Put it in credentials as `kulla.webhook_secret` (or `KULLA_WEBHOOK_SECRET`). The
-gem mounts `/kulla/signals`, verifies Kulla's `X-Kulla-Signature` (HMAC-SHA256, 5-minute tolerance) and
-syncs signals at once instead of at the next minute's poll. Without a secret the endpoint answers 404.
+In Kulla, App › Settings › Signal webhook takes `https://<your app>/kulla/signals`. That is the whole
+setup: the gem mounts `/kulla/signals` and verifies Kulla's `X-Kulla-Signature` (HMAC-SHA256, 5-minute
+tolerance) with a key derived from the app's token, which every process already holds; Kulla derives
+the same key from the token's digest. Nothing is copied, and the key follows the token when it rotates.
+On a valid delivery the gem syncs signals at once instead of at the next minute's poll.
 
 ### Security events and CSP reports
 
