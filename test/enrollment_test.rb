@@ -1,0 +1,106 @@
+require_relative "test_helper"
+
+class EnrollmentTest < Minitest::Test
+  include KullaTestHelpers
+
+  # Answers /api/v1/enroll from a queue of states; everything else goes to FakeAdapter.
+  ISSUED = "kla_issued_by_kulla".freeze
+
+  class EnrollAdapter < FakeAdapter
+    attr_reader :enrolls
+
+    def initialize(states, **options)
+      super(**options)
+      @states = states
+      @enrolls = []
+    end
+
+    def post(url, body, headers)
+      return super unless url.path == Kulla::Transport::ENROLL_PATH
+
+      @enrolls << { body: JSON.parse(body), headers: headers }
+      state = @states.shift || "pending"
+      body = state == "approved" ? { state: state, token: ISSUED } : { state: state }
+      Kulla::Transport::Response.new({ "approved" => 200, "rejected" => 403 }.fetch(state, 202), {}, JSON.generate(body))
+    end
+  end
+
+  def enrolling_config(key: "kli_#{"k" * 43}")
+    build_config(token: nil, enroll: true, app_name: "Shop").tap do |c|
+      c.instance_variable_set(:@enrollment_key, key)
+    end
+  end
+
+  def test_enrollment_key_is_stable_and_shaped_like_a_token
+    config = Kulla::Configuration.new
+    secret = "s" * 64
+    key = config.send(:base58, OpenSSL::HMAC.digest("SHA256", secret, Kulla::Configuration::ENROLL_CONTEXT))
+    assert_equal key, config.send(:base58, OpenSSL::HMAC.digest("SHA256", secret, Kulla::Configuration::ENROLL_CONTEXT))
+    assert_match(/\A[1-9A-HJ-NP-Za-km-z]{40,64}\z/, key)
+    refute_equal key, config.send(:base58, OpenSSL::HMAC.digest("SHA256", "t" * 64, Kulla::Configuration::ENROLL_CONTEXT))
+  end
+
+  def test_a_configured_token_skips_enrollment
+    config = build_config
+    refute config.enrolling?
+    assert Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: FakeAdapter.new)).approved?
+  end
+
+  def test_enroll_sends_the_key_and_app_details_without_a_bearer_token
+    config = enrolling_config
+    adapter = EnrollAdapter.new([ "pending" ])
+    assert_equal [ "pending", nil ], Kulla::Transport.new(config, adapter: adapter).enroll
+
+    sent = adapter.enrolls.first
+    assert_equal({ "key" => config.enrollment_key, "name" => "Shop", "host" => "test-host", "env" => "production", "sdk" => Kulla::VERSION },
+                 sent[:body])
+    assert_nil sent[:headers]["Authorization"]
+  end
+
+  def test_events_wait_in_the_buffer_until_approved_then_go_out_with_the_issued_token
+    config = enrolling_config
+    adapter = EnrollAdapter.new([ "pending", "approved" ])
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    refute client.approved?
+
+    client.track("log", { "n" => 1 })
+    client.send(:check_approval)
+    refute client.approved?
+    assert_nil config.auth_token
+    assert_empty adapter.posts
+
+    client.send(:check_approval)
+    assert client.approved?
+    client.flush
+    assert_equal [ "log" ], adapter.events.map { |e| e["stream"] }
+    assert_equal "Bearer #{ISSUED}", adapter.posts.first[:headers]["Authorization"]
+    refute_includes adapter.posts.map { |p| p[:headers]["Authorization"] }, "Bearer #{config.enrollment_key}"
+  ensure
+    client&.stop
+  end
+
+  def test_a_revoked_token_sends_the_app_back_to_asking
+    config = enrolling_config
+    adapter = EnrollAdapter.new([ "approved" ])
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    client.send(:check_approval)
+    assert client.approved?
+
+    client.transport.stub(:fetch_manifest, [ 401, nil, nil ]) { client.send(:refresh_manifest) }
+    refute client.approved?
+    assert_nil config.issued_token
+  ensure
+    client&.stop
+  end
+
+  def test_the_install_key_is_not_a_token
+    assert_match(/\Akli_/, enrolling_config.enrollment_key)
+    config = Kulla::Configuration.new
+    config.env = "production"
+    config.endpoint = "https://kulla.example"
+    config.enroll = true
+    config.instance_variable_set(:@enrollment_key, "kli_#{"k" * 43}")
+    assert config.enabled?, "an app waiting to join is enabled"
+    assert_nil config.auth_token
+  end
+end
