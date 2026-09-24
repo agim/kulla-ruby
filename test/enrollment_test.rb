@@ -103,4 +103,15 @@ class EnrollmentTest < Minitest::Test
     assert config.enabled?, "an app waiting to join is enabled"
     assert_nil config.auth_token
   end
+
+  def test_a_placeholder_secret_never_joins
+    fake_rails = Module.new do
+      def self.application = Struct.new(:secret_key_base).new("x")
+    end
+    Object.stub_const_for_test(:Rails, fake_rails) do
+      config = Kulla::Configuration.new
+      config.define_singleton_method(:rails_app?) { true }
+      assert_nil config.enrollment_key
+    end
+  end
 end

@@ -136,3 +136,17 @@ module KullaTestHelpers
     super
   end
 end
+
+class Object
+  # Temporarily defines a top-level constant (core tests never load Rails).
+  def self.stub_const_for_test(name, value)
+    had = const_defined?(name, false)
+    old = const_get(name) if had
+    remove_const(name) if had
+    const_set(name, value)
+    yield
+  ensure
+    remove_const(name) if const_defined?(name, false)
+    const_set(name, old) if had
+  end
+end

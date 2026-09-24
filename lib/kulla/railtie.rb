@@ -27,6 +27,8 @@ module Kulla
         client = Kulla.client
         install_subscribers(client, config)
         return if console? || rake?
+        # Only a real server or job process asks to join; one-off commands (rails runner, scripts) never do.
+        return if config.enrolling? && !(server? || jobs?)
 
         client.start
         Subscribers::Deploy.track(client) if server?
@@ -67,6 +69,11 @@ module Kulla
       def server?
         return true if defined?(::Rails::Server) || defined?(::Puma::Launcher)
         $PROGRAM_NAME.match?(/puma|unicorn|passenger|falcon|pitchfork|thrust|iodine/)
+      end
+
+      def jobs?
+        return true if defined?(::SolidQueue::Supervisor) && $PROGRAM_NAME.match?(/jobs|solid_queue/)
+        $PROGRAM_NAME.match?(/sidekiq|good_job|solid_queue|bin\/jobs/)
       end
 
       def console?

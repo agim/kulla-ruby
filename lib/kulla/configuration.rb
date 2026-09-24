@@ -1,6 +1,7 @@
 module Kulla
   class Configuration
     ENROLL_CONTEXT = "kulla-enroll-v1".freeze
+    MIN_SECRET_LENGTH = 32
     BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".freeze
     CAPTURE_DEFAULTS = {
       requests: true, errors: true, jobs: true, mail: true, security: true,
@@ -58,7 +59,9 @@ module Kulla
     def enrollment_key
       return @enrollment_key if defined?(@enrollment_key)
       secret = rails_app? && Rails.application.respond_to?(:secret_key_base) ? Rails.application.secret_key_base.to_s : ""
-      @enrollment_key = secret.empty? ? nil : "kli_#{base58(OpenSSL::HMAC.digest("SHA256", secret, ENROLL_CONTEXT))}"
+      # A short secret is a placeholder (e.g. SECRET_KEY_BASE=x for a one-off command); anyone could
+      # recompute its key, so never join with it.
+      @enrollment_key = secret.length < MIN_SECRET_LENGTH ? nil : "kli_#{base58(OpenSSL::HMAC.digest("SHA256", secret, ENROLL_CONTEXT))}"
     rescue StandardError
       @enrollment_key = nil
     end
