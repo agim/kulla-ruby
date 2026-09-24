@@ -176,4 +176,34 @@ class RailtieTest < Minitest::Test
     end
     assert_equal [ "/things/1" ] * 2, events("visit").map { |e| e["attrs"]["path"] }
   end
+
+  def with_program(name)
+    old_program, old_zero = $PROGRAM_NAME, $0
+    $PROGRAM_NAME = name
+    yield
+  ensure
+    $PROGRAM_NAME = old_program
+    $0 = old_zero
+  end
+
+  def test_only_real_servers_and_job_processes_count
+    with_program("bin/rails") { refute Kulla::Railtie.server?, "a plain rails command is not a server" }
+    with_program("/app/vendor/bundle/bin/puma") { assert Kulla::Railtie.server? }
+    with_program("puma 7.1.0 (tcp://0.0.0.0:3000) [app]") { assert Kulla::Railtie.server? }
+    with_program("./bin/thrust") { assert Kulla::Railtie.server? }
+    with_program("bin/jobs") { assert Kulla::Railtie.jobs? }
+    with_program("solid-queue-supervisor(1.6.0)") { assert Kulla::Railtie.jobs? }
+    with_program("bin/rails") { refute Kulla::Railtie.jobs? }
+  end
+
+  def test_rails_runner_is_never_a_server_or_job_process
+    added_command = !defined?(Rails::Command)
+    Rails.const_set(:Command, Module.new) if added_command
+    Rails::Command.const_set(:RunnerCommand, Class.new) unless defined?(Rails::Command::RunnerCommand)
+    with_program("/app/vendor/bundle/bin/puma") { refute Kulla::Railtie.server? }
+    with_program("bin/jobs") { refute Kulla::Railtie.jobs? }
+  ensure
+    Rails::Command.send(:remove_const, :RunnerCommand) if defined?(Rails::Command::RunnerCommand)
+    Rails.send(:remove_const, :Command) if added_command
+  end
 end

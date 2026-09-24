@@ -75,14 +75,24 @@ module Kulla
         Kulla.log("signal integrations failed: #{e.class}: #{e.message}")
       end
 
+      SERVER_PROGRAM = /puma|unicorn|passenger|falcon|pitchfork|thrust|iodine/
+
+      # A web server is running this process: `rails server`, or a server binary (bundle exec puma,
+      # thrust). Not a constant that merely exists because the server gem is loaded (Puma::Launcher is
+      # defined in any process that requires puma, `rails runner` included).
       def server?
-        return true if defined?(::Rails::Server) || defined?(::Puma::Launcher)
-        $PROGRAM_NAME.match?(/puma|unicorn|passenger|falcon|pitchfork|thrust|iodine/)
+        return false if runner?
+        return true if defined?(::Rails::Server)
+        [ $PROGRAM_NAME, $0 ].any? { |name| File.basename(name.to_s).match?(SERVER_PROGRAM) || name.to_s.match?(/\Apuma /) }
+      end
+
+      def runner?
+        defined?(::Rails::Command::RunnerCommand) ? true : false
       end
 
       def jobs?
-        return true if defined?(::SolidQueue::Supervisor) && $PROGRAM_NAME.match?(/jobs|solid_queue/)
-        $PROGRAM_NAME.match?(/sidekiq|good_job|solid_queue|bin\/jobs/)
+        return false if runner?
+        [ $PROGRAM_NAME, $0 ].any? { |name| name.to_s.match?(%r{sidekiq|good_job|solid.?queue|(?:\A|/)jobs\z}) }
       end
 
       def console?
