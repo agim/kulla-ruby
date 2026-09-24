@@ -9,6 +9,8 @@ module Kulla
     MAX_REPORT_BYTES = 8_192 # error and CSP reports carry a stack or a policy excerpt
     ORIGIN = %r{(?:https?://[^/\s)]+|webpack-internal://)}
     DIGEST = /-[0-9a-f]{8,64}(?=\.(?:js|css|mjs))/
+    FRAME_QUERY = /[?#][^\s):]*/                                 # "?x=1" or "#frag" before the ":line:col"
+    FRAME_TOKEN = %r{(?<=/)(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{16,}(?=[/:)\s]|\z)}
     DEVICES = %w[phone tablet desktop].freeze
 
     def initialize(app, client: nil, secret: nil)
@@ -134,7 +136,13 @@ module Kulla
         end
 
         # "https://app.com/assets/application-3f9a1c2b.js:1:2345" -> "/assets/application.js:1:2345"
-        def clean_frame(line) = line.to_s.gsub(ORIGIN, "").gsub(DIGEST, "")[0, 300]
+        # A stack frame keeps only its path, line and column: the origin, asset digests, any query string
+        # and token-looking path segments go, since the page URL is often the credential (portal links,
+        # password resets) and inline-script frames carry it verbatim.
+        def clean_frame(line)
+          text = line.to_s.gsub(ORIGIN, "").gsub(DIGEST, "").gsub(FRAME_QUERY, "").gsub(FRAME_TOKEN, ":token")
+          Scrubber.clean_content(text, 300)
+        end
 
         # Only the origin or keyword of what was blocked, never a full URL with its query.
         def blocked(value)

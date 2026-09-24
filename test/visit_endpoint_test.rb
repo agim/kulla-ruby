@@ -68,6 +68,15 @@ class VisitEndpointTest < Minitest::Test
     assert_empty visits
   end
 
+  def test_frames_keep_no_tokens_queries_or_origins
+    clean = ->(line) { Kulla::VisitEndpoint.clean_frame(line) }
+    assert_equal "handleClick@/q/:token:412:17", clean.call("handleClick@https://portal.example/q/op4xfzpUjX9ab2cdEFqU-8a:412:17")
+    assert_equal "HTMLButtonElement.<anonymous> (/q/:token:88:3)", clean.call("HTMLButtonElement.<anonymous> (https://shop.example/q/op4xfzpUjX9ab2cdEFqU-8a?x=1:88:3)")
+    assert_equal "/passwords/:token/edit:12:5", clean.call("https://shop.example/passwords/abcDEF1234567890abcdef/edit:12:5")
+    assert_equal "/assets/app.js:1:2", clean.call("https://shop.example/assets/app-0123456789abcdef.js?v=3#x:1:2")
+    assert_equal "onload@/orders/42:7:1", clean.call("onload@https://shop.example/orders/42:7:1")
+  end
+
   def test_other_paths_and_methods
     assert_equal "app", @request.get("/kulla/visits").body
     assert_equal "app", @request.post("/other").body

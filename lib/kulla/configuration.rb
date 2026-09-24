@@ -17,6 +17,12 @@ module Kulla
       action_cable. action_text. active_job. active_record. active_storage. active_support. railties.
     ].freeze
 
+    # A public hostname: letters, digits and hyphens per label, a dotted TLD, no port. Placeholders
+    # (Rails' generated example.com, localhost, .test, .local) never count, so an app that left the
+    # generator default falls back to its module name instead of enrolling as "example.com".
+    HOSTNAME = /\A(?=.{4,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\z/i
+    PLACEHOLDER_HOST = /\A(?:.*\.)?(?:example\.(?:com|org|net)|localhost|.*\.(?:test|local|localdomain|internal|invalid))\z/i
+
     attr_writer :token, :endpoint, :env, :release, :enabled, :filter_parameters, :host, :logger, :enroll, :app_name
     attr_accessor :flush_interval, :batch_size, :buffer_size, :timeout, :transport, :ignored_events
     # The token Kulla hands out after the owner approves this app (joining without a token). Memory only.
@@ -106,10 +112,30 @@ module Kulla
       token.nil? && enroll? && !enrollment_key.nil?
     end
 
+    # The app's public hostname ("shop.example.com"): KULLA_SITE, else the host Rails builds its URLs
+    # with (Action Mailer's default_url_options, then the routes', then Action Controller's). Nil when
+    # none is set or it is a placeholder. Sent with every request so Kulla names the app by its domain.
+    def site
+      return @site if defined?(@site)
+      @site = self.class.hostname(presence(ENV["KULLA_SITE"]) || rails_site)
+    end
+
+    # Anything but a real hostname (a URL, a placeholder, blank) leaves the site unknown.
+    def site=(value)
+      @site = self.class.hostname(value)
+    end
+
+    # Kulla names apps by domain: the site when known, else KULLA_APP_NAME, the Rails module, the directory.
     def app_name
-      @app_name ||= presence(ENV["KULLA_APP_NAME"]) ||
+      @app_name ||= presence(ENV["KULLA_APP_NAME"]) || site ||
                     (rails_app? && Rails.application.class.respond_to?(:module_parent_name) && Rails.application.class.module_parent_name) ||
                     File.basename(root)
+    end
+
+    # A lowercased hostname, or nil when the value is not one (or is a placeholder).
+    def self.hostname(value)
+      host = value.to_s.strip.downcase.sub(%r{\Ahttps?://}, "").sub(%r{[/:].*\z}, "")
+      host if host.match?(HOSTNAME) && !host.match?(PLACEHOLDER_HOST)
     end
 
     def env
@@ -175,6 +201,21 @@ module Kulla
     private
       def rails_app?
         defined?(Rails) && Rails.respond_to?(:application) && !Rails.application.nil?
+      end
+
+      # The first real hostname among the places Rails keeps its own URL host.
+      def rails_site
+        return unless rails_app?
+        config = Rails.application.config
+        candidates = [
+          (config.action_mailer.default_url_options if config.respond_to?(:action_mailer)),
+          Rails.application.routes.default_url_options,
+          (config.action_controller.default_url_options if config.respond_to?(:action_controller))
+        ]
+        candidates.filter_map { |options| options.respond_to?(:[]) && (options[:host] || options["host"]) }
+                  .filter_map { |host| self.class.hostname(host) }.first
+      rescue StandardError
+        nil
       end
 
       def rails_credential(key)

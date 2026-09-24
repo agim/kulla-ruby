@@ -123,9 +123,9 @@ module Kulla
     # POST /api/v1/enroll, the only call without a token: ask to join, and pick up the token once the
     # owner has approved this app. Returns [ state, token ]; state is nil on a network or server error.
     def enroll
-      body = { key: config.enrollment_key, name: config.app_name, host: config.host, env: config.env, sdk: Kulla::VERSION }
-      response = adapter.post(url(ENROLL_PATH), JSON.generate(body),
-                              { "Accept" => "application/json", "Content-Type" => "application/json", "User-Agent" => "kulla-ruby/#{Kulla::VERSION}" })
+      body = { key: config.enrollment_key, name: config.app_name, site: config.site, host: config.host, env: config.env, sdk: Kulla::VERSION }
+      response = adapter.post(url(ENROLL_PATH), JSON.generate(body.compact),
+                              site_header("Accept" => "application/json", "Content-Type" => "application/json", "User-Agent" => "kulla-ruby/#{Kulla::VERSION}"))
       return [ "rejected", nil ] if response.code == 403
       return [ nil, nil ] unless response.code.between?(200, 299)
 
@@ -227,11 +227,17 @@ module Kulla
       end
 
       def base_headers
-        {
+        site_header(
           "Authorization" => "Bearer #{config.auth_token}",
           "Accept" => "application/json",
           "User-Agent" => "kulla-ruby/#{Kulla::VERSION}"
-        }
+        )
+      end
+
+      # The app's public hostname rides on every request, so Kulla can name the app by its domain.
+      def site_header(headers)
+        site = config.site
+        site ? headers.merge("X-Kulla-Site" => site) : headers
       end
 
       def event_headers

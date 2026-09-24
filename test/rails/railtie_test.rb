@@ -22,6 +22,7 @@ unless defined?(RAILS_UNAVAILABLE)
     config.filter_parameters += [ :passw ]
     config.action_dispatch.show_exceptions = :all
     config.action_mailer.delivery_method = :test
+    config.action_mailer.default_url_options = { host: "shop.acme-test.com" }
 
     routes.append do
       get "/things/:id" => "things#show"
@@ -84,6 +85,11 @@ class RailtieTest < Minitest::Test
 
   def test_filter_parameters_come_from_rails
     assert_includes Kulla.config.filter_parameters, :passw
+  end
+
+  def test_the_site_and_app_name_come_from_the_mailer_host
+    assert_equal "shop.acme-test.com", Kulla.config.site
+    assert_equal "shop.acme-test.com", Kulla.config.app_name
   end
 
   def test_requests_use_the_route_template_and_skip_up

@@ -55,6 +55,33 @@ class EnrollmentTest < Minitest::Test
     assert_equal({ "key" => config.enrollment_key, "name" => "Shop", "host" => "test-host", "env" => "production", "sdk" => Kulla::VERSION },
                  sent[:body])
     assert_nil sent[:headers]["Authorization"]
+    assert_nil sent[:headers]["X-Kulla-Site"]
+  end
+
+  def test_the_site_names_the_app_and_rides_on_every_request
+    config = enrolling_config
+    config.site = "Shop.Example-Store.com"
+    config.app_name = nil
+    assert_equal "shop.example-store.com", config.site
+    assert_equal "shop.example-store.com", config.app_name
+
+    adapter = EnrollAdapter.new([ "pending" ])
+    Kulla::Transport.new(config, adapter: adapter).enroll
+    sent = adapter.enrolls.first
+    assert_equal "shop.example-store.com", sent[:body]["site"]
+    assert_equal "shop.example-store.com", sent[:body]["name"]
+    assert_equal "shop.example-store.com", sent[:headers]["X-Kulla-Site"]
+  end
+
+  def test_placeholder_hosts_never_become_the_site
+    assert_nil Kulla::Configuration.hostname("example.com")
+    assert_nil Kulla::Configuration.hostname("www.example.org")
+    assert_nil Kulla::Configuration.hostname("localhost")
+    assert_nil Kulla::Configuration.hostname("shop.test")
+    assert_nil Kulla::Configuration.hostname("10.0.0.1")
+    assert_nil Kulla::Configuration.hostname("")
+    assert_equal "shop.example-store.com", Kulla::Configuration.hostname("https://Shop.example-store.com:3000/path")
+    assert_equal "shop-store.com", Kulla::Configuration.hostname("shop-store.com")
   end
 
   def test_events_wait_in_the_buffer_until_approved_then_go_out_with_the_issued_token
