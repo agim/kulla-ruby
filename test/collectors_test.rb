@@ -131,4 +131,32 @@ class CollectorsTest < Minitest::Test
     end
     assert_equal({ "rule" => "login_failed", "match_type" => "app", "ip" => "203.0.113.9", "path" => "/session" }, events("security").first["attrs"])
   end
+
+  def test_free_text_loses_emails_tokens_numbers_and_query_strings
+    text = "Throttled /portal/q?t=8f2Kx9LmQ2pZ7wT4vB1nR6yU for jane@example.com, call +355 69 123 4567, sig data:image/png;base64,iVBORw0KGgo="
+    assert_equal "Throttled /portal/q?[query] for [email], call [number], sig [data]", Kulla::Scrubber.clean_content(text)
+    assert_equal "/portal/:token/sign", Kulla::Scrubber.clean_path("/portal/8f2Kx9LmQ2pZ7wT4vB1n/sign")
+    assert_equal "/users/42/edit", Kulla::Scrubber.clean_path("/users/42/edit")
+  end
+
+  def test_personal_fields_are_filtered_whatever_the_app_configured
+    scrubbed = Kulla::Scrubber.new([]).call({ "phone" => "+1 555 0100", "billing_address" => "1 Main St", "signature" => "iVBOR…", "plan" => "pro" })
+    assert_equal({ "phone" => "[FILTERED]", "billing_address" => "[FILTERED]", "signature" => "[FILTERED]", "plan" => "pro" }, scrubbed)
+    assert_equal({ "signer_name" => "[FILTERED]", "id" => "7" }, Kulla::Scrubber.filter_names({ "signer_name" => "Jane", "id" => "7" }))
+  end
+
+  def test_log_lines_are_scrubbed
+    Kulla::Subscribers::Logs.new(@client).warn("Rack::Attack throttled GET /portal/abc?token=8f2Kx9LmQ2pZ7wT4vB1nR6yU from jane@example.com")
+    assert_equal "Rack::Attack throttled GET /portal/abc?[query] from [email]", events("log").first["message"]
+  end
+
+  def test_remote_notifications_cannot_reach_sensitive_events_or_fields
+    denied = Kulla::Subscribers::Generic::DENIED
+    %w[process_action.action_controller sql.active_record deliver.action_mailer perform.active_job].each { |name| assert_match denied, name }
+    refute_match denied, "cache_write.active_support"
+
+    event = Struct.new(:payload, :duration).new({ key: "views/users/jane@example.com", path: "/reset/abc", store: "SolidCache", hit: true, note: "for jane@example.com" }, 1.25)
+    Kulla::Subscribers::Generic.track(@client, "cache_write.active_support", event)
+    assert_equal({ "store" => "SolidCache", "hit" => true, "note" => "for [email]", "duration_ms" => 1.3 }, events("cache_write.active_support").first["attrs"])
+  end
 end

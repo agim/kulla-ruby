@@ -99,6 +99,20 @@ Kulla can switch each of these on or off, and change the thresholds, per app fro
 (the manifest's `config`), without a new gem release or a deploy. A setting in your initializer
 always wins over Kulla's.
 
+### What never leaves the app
+
+- **Keys:** credentials (authorization, cookie, password, secret, token…) are dropped, and your
+  `filter_parameters` plus personal fields Rails misses (phone, address, signature, first/last/full name,
+  date of birth, IBAN, card, passport…) are `[FILTERED]`. In error params any `*name` field is filtered too.
+- **Content:** free text (log lines, error messages, breadcrumbs, params, extra events) has emails,
+  token-like strings, `data:` URLs, query strings and long digit runs (cards, phone numbers) replaced.
+  Browser paths (visits, JS errors, CSP) have token-like segments replaced (`/portal/:token`).
+- **Remote extra events** (`notifications` from Kulla) can't name events that carry raw URLs, SQL, mail or
+  params (`process_action`, `sql.active_record`, `*.action_mailer`, …), and drop `path`, `url`, `sql`,
+  `subject`, recipients, `params`, `key` and similar fields. To refuse all of them: `c.notifications = []`.
+- **Still yours to check:** log lines that print whole records or custom identifiers. Content scrubbing
+  catches the common shapes, not everything. Add app-specific keys to `filter_parameters`.
+
 ### Security events and CSP reports
 
 ```ruby

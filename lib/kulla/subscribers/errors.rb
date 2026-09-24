@@ -19,7 +19,7 @@ module Kulla
 
         attrs = {
           "class" => exception.class.name,
-          "message" => Scrubber.clean_string(exception.message.to_s, Event::MAX_MESSAGE_BYTES),
+          "message" => Scrubber.clean_content(exception.message.to_s, Event::MAX_MESSAGE_BYTES),
           "backtrace" => frames,
           "app_frames" => frames.count { |frame| app_frame?(frame) },
           "handled" => handled ? true : false,
@@ -61,11 +61,11 @@ module Kulla
           extracted["action"] = controller.action_name if controller.respond_to?(:action_name)
           if controller.respond_to?(:request) && (request = controller.request)
             trace = request.request_id if request.respond_to?(:request_id)
-            extracted["path"] = request.path if request.respond_to?(:path)
+            extracted["path"] = Scrubber.clean_path(request.path) if request.respond_to?(:path)
             extracted["method"] = request.request_method if request.respond_to?(:request_method)
             if request.respond_to?(:filtered_parameters)
               params = request.filtered_parameters.except("controller", "action", "format")
-              extracted["params"] = params unless params.empty?
+              extracted["params"] = Scrubber.filter_names(params) unless params.empty?
             end
           end
         end

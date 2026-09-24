@@ -41,7 +41,7 @@ module Kulla
 
       def record(http, req, response, started, error)
         ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(1)
-        attrs = { "host" => http.address, "method" => req.method, "path" => req.path.to_s.split("?").first.to_s[0, 200],
+        attrs = { "host" => http.address, "method" => req.method, "path" => Scrubber.clean_path(req.path.to_s.split("?").first.to_s, 200),
                   "status" => response&.code&.to_i, "duration_ms" => ms, "error" => error&.class&.name }.compact
         ctx = Context.current
         if ctx

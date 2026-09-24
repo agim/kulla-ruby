@@ -54,7 +54,7 @@ module Kulla
     def http! = @http_calls += 1
 
     def breadcrumb(kind, message, **data)
-      @breadcrumbs << { "kind" => kind, "message" => message.to_s[0, 300], "at" => Time.now.utc.iso8601(3) }.merge(data.transform_keys(&:to_s)).compact
+      @breadcrumbs << { "kind" => kind, "message" => Scrubber.clean_content(message.to_s[0, 300]), "at" => Time.now.utc.iso8601(3) }.merge(data.transform_keys(&:to_s)).compact
       @breadcrumbs.shift while @breadcrumbs.size > BREADCRUMBS
     end
 

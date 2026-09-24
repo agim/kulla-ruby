@@ -44,7 +44,7 @@ module Kulla
         (@window, @sent) = [ minute, 0 ] if @window != minute
         return if @sent >= @client.config.logs_per_minute
         @sent += 1
-        @client.track("log", {}, level: level_name, message: message, trace: Context.current&.trace, scrub: true)
+        @client.track("log", {}, level: level_name, message: Scrubber.clean_content(message, 2_000), trace: Context.current&.trace, scrub: true)
       end
     end
 
@@ -52,11 +52,16 @@ module Kulla
     # a stream of that name: scalar payload values plus duration_ms. New data without a gem release.
     module Generic
       @subscribed = {}
+      # Events the SDK already captures in a safe shape, or whose payloads carry raw URLs, SQL, mail or
+      # params. Asking for them remotely is ignored.
+      DENIED = /\A(?:process_action|start_processing|send_file|send_data|redirect_to|unpermitted_parameters)\.action_controller\z|\.(?:action_mailer|action_mailbox|action_dispatch|action_view|action_cable|active_storage)\z|\Asql\.active_record\z|\A(?:perform|perform_start|enqueue)\.active_job\z/
+      # Payload keys that carry URLs, SQL, mail, request data or cache keys: never sent.
+      DROP_KEYS = /\A(?:path|fullpath|url|uri|sql|subject|to|from|cc|bcc|mail|message|headers|params|request|response|body|key|keys|query|location|referer|referrer)\z/
 
       module_function
 
       def sync(client, names)
-        wanted = Array(names).map(&:to_s).grep(/\A[a-z][a-z0-9_]*(\.[a-z0-9_]+)+\z/).first(20)
+        wanted = Array(names).map(&:to_s).grep(/\A[a-z][a-z0-9_]*(\.[a-z0-9_]+)+\z/).grep_v(DENIED).first(20)
         (@subscribed.keys - wanted).each { |name| ActiveSupport::Notifications.unsubscribe(@subscribed.delete(name)) }
         (wanted - @subscribed.keys).each do |name|
           @subscribed[name] = ActiveSupport::Notifications.subscribe(name) { |event| track(client, name, event) }
@@ -64,8 +69,8 @@ module Kulla
       end
 
       def track(client, name, event)
-        attrs = event.payload.select { |_, v| v.is_a?(String) || v.is_a?(Numeric) || v == true || v == false || v.is_a?(Symbol) }
-                     .first(20).to_h { |k, v| [ k.to_s, v.is_a?(Symbol) ? v.to_s : v ] }
+        attrs = event.payload.select { |k, v| !DROP_KEYS.match?(k.to_s) && (v.is_a?(String) || v.is_a?(Numeric) || v == true || v == false || v.is_a?(Symbol)) }
+                     .first(20).to_h { |k, v| [ k.to_s, v.is_a?(String) || v.is_a?(Symbol) ? Scrubber.clean_content(v.to_s, 200) : v ] }
         attrs["duration_ms"] = event.duration.round(1)
         client.track(name, attrs, trace: Context.current&.trace)
       rescue StandardError => e

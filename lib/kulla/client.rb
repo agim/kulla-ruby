@@ -67,7 +67,7 @@ module Kulla
       attrs, trace = Subscribers::Errors.attrs_for(exception, context: context, handled: handled,
                                                    severity: severity, source: source, config: config)
       level = handled ? Event.normalize_level(severity) : "error"
-      track("error", attrs, level: level, message: "#{exception.class}: #{exception.message}", trace: trace, scrub: false)
+      track("error", attrs, level: level, message: "#{exception.class}: #{attrs["message"]}", trace: trace, scrub: false)
     rescue StandardError => e
       Kulla.log("error capture failed: #{e.class}: #{e.message}")
       nil

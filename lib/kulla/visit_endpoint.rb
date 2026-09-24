@@ -50,7 +50,7 @@ module Kulla
       def record_browser_error(client, data)
         return unless client.config.capture?(:browser_errors)
         name = Scrubber.clean_string(data["name"].to_s[/\A[\w.$]{1,80}/] || "Error", 80)
-        message = Scrubber.clean_string(data["message"].to_s, 500)
+        message = Scrubber.clean_content(data["message"].to_s, 500)
         frames = data["stack"].to_s.lines.map { |l| l.strip.sub(/\Aat /, "") }.reject(&:empty?)
                               .reject { |l| l.start_with?(name) && l.include?(message[0, 20].to_s) }
                               .first(20).map { |l| self.class.clean_frame(l) }
@@ -153,12 +153,12 @@ module Kulla
           # Path only: query strings can carry tokens.
           def local_path(value)
             path = value.to_s.split(/[?#]/).first.to_s
-            path.start_with?("/") ? Scrubber.clean_string(path, 512) : nil
+            path.start_with?("/") ? Scrubber.clean_path(path, 512) : nil
           end
 
           def referrer(value)
             value = value.to_s.split(/[?#]/).first.to_s
-            value.empty? ? nil : Scrubber.clean_string(value, 512)
+            value.empty? ? nil : Scrubber.clean_path(value, 512)
           end
 
           def number(value, max)

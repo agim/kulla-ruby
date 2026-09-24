@@ -9,6 +9,22 @@ module Kulla
     FILTERED = "[FILTERED]".freeze
     TRUNCATED = "[TRUNCATED]".freeze
     ALWAYS_DROP = /(?:\A|_)(?:authorization|cookies?|set_cookie|password|passwd|secrets?|tokens?)(?:_|\z)/
+    # Personal fields Rails' default filter_parameters misses; filtered in params/context whatever the app
+    # configured. (SDK-built attrs such as request ip are sent with filter: false and aren't affected.)
+    ALWAYS_FILTER = /(?:\A|_)(?:signatures?|phone|mobile|address|street|zip|postcode|postal_code|first_?name|last_?name|full_?name|surname|dob|birth_?date|birthday|ssn|iban|card_?number|cvc|cvv|passport|national_id|tax_id)(?:_|\z)/
+
+    # Content that must not leave the app even under a harmless key: emails, token-like strings,
+    # long digit runs (phones, cards), data: URLs, and URL query strings.
+    CONTENT = [
+      [ %r{data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+}, "[data]" ],
+      [ /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, "[email]" ],
+      [ %r{(https?://[^\s?#"']+|\A/[^\s?#"']*|\s/[^\s?#"']*)\?[^\s#"']+}, "\\1?[query]" ],
+      [ /\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{24,}\b/, "[token]" ],
+      [ /\b[0-9a-f]{32,}\b/i, "[token]" ],
+      [ /(?<![\w.])\+\d[\d\s()-]{7,}\d(?![\w.])/, "[number]" ],   # +355 69 123 4567 (not IPs or dates)
+      [ /(?<![\w.])\d{10,}(?![\w.])/, "[number]" ]                  # 4111111111111111, 0691234567
+    ].freeze
+    TOKEN_SEGMENT = %r{(?<=/)(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{16,}(?=/|\z)}
     MAX_DEPTH = 6
     MAX_ITEMS = 500
     MAX_STRING_BYTES = 8_192
@@ -30,6 +46,27 @@ module Kulla
       ALWAYS_DROP.match?(key.downcase.tr("-", "_"))
     end
 
+    # Replaces emails, tokens, long numbers, data: URLs and query strings in free text.
+    def self.clean_content(value, max_bytes = MAX_STRING_BYTES)
+      CONTENT.reduce(clean_string(value, max_bytes)) { |text, (pattern, replacement)| text.gsub(pattern, replacement) }
+    end
+
+    PARAM_NAME = /(?:\A|_)name\z/i
+
+    # Request params: also hide any *name field (a person's or company's name, almost always).
+    def self.filter_names(value)
+      case value
+      when Hash then value.to_h { |k, v| [ k, PARAM_NAME.match?(k.to_s) && !v.is_a?(Hash) ? FILTERED : filter_names(v) ] }
+      when Array then value.map { |v| filter_names(v) }
+      else value
+      end
+    end
+
+    # A URL path with token-like segments replaced: "/portal/8f2Kx9…" -> "/portal/:token".
+    def self.clean_path(value, max_bytes = 512)
+      clean_string(value, max_bytes).gsub(TOKEN_SEGMENT, ":token")
+    end
+
     def self.clean_string(value, max_bytes = MAX_STRING_BYTES)
       string = value.to_s
       string = string.dup.force_encoding(Encoding::UTF_8) unless string.encoding == Encoding::UTF_8
@@ -43,7 +80,7 @@ module Kulla
         case value
         when Hash then sanitize_hash(value, depth, path, filter)
         when Array, Set then sanitize_array(value.to_a, depth, path, filter)
-        when String then self.class.clean_string(value)
+        when String then filter ? self.class.clean_content(value) : self.class.clean_string(value)
         when Symbol then value.to_s
         when Integer, true, false, nil then value
         when Float then value.finite? ? value : value.to_s
@@ -62,7 +99,8 @@ module Kulla
           next if filter && self.class.drop_key?(key)
 
           full_path = path ? "#{path}.#{key}" : key
-          out[key] = filter && filtered_key?(key, full_path) ? FILTERED : sanitize(value, depth + 1, full_path, filter)
+          personal = filter && (filtered_key?(key, full_path) || ALWAYS_FILTER.match?(key.downcase.tr("-", "_")))
+          out[key] = personal ? FILTERED : sanitize(value, depth + 1, full_path, filter)
         end
       end
 

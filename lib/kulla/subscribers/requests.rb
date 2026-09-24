@@ -45,7 +45,7 @@ module Kulla
         ua = header(request, headers, "HTTP_USER_AGENT")
         attrs = {
           "method" => payload[:method] || request&.request_method,
-          "path" => route_template(request) || raw_path,
+          "path" => route_template(request) || Scrubber.clean_path(raw_path),
           "status" => status(payload),
           "duration_ms" => duration&.round(1),
           "db_ms" => payload[:db_runtime]&.round(1),
