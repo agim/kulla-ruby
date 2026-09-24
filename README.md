@@ -197,15 +197,15 @@ cache) and reports the IPs it blocks.
 
 ## Page visits
 
-```erb
-<%# app/views/layouts/application.html.erb %>
-<%= kulla_beacon_tag %>
-```
+Nothing to add: `Kulla::BeaconInjector` middleware puts the beacon into every full HTML page (200,
+`text/html`, GET, not a Turbo Frame/Stream or XHR response, not a streamed body), with your CSP nonce
+when the page has one, once per page. Turn it off with `c.capture = { beacon: false }` (Kulla can also
+turn it off per app), and use `<%= kulla_beacon_tag %>` in a layout if you prefer to place it yourself.
 
-An inline script (with your CSP nonce) posts page, referrer, viewport, device and Web Vitals to your
-app's own `/kulla/visit`, handled by `Kulla::VisitEndpoint` middleware. The token never reaches the
-browser. No cookies: the visitor id is a daily-rotating hash of IP, user agent and `secret_key_base`.
-Turbo navigations count as visits.
+The script posts page, referrer, viewport, device, Web Vitals and JavaScript errors to your app's own
+`/kulla/visit`, handled by `Kulla::VisitEndpoint`. The token never reaches the browser. No cookies: the
+visitor id is a daily-rotating hash of IP, user agent and `secret_key_base`. Turbo navigations count as
+visits.
 
 ## Development
 

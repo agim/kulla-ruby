@@ -4,6 +4,7 @@ module Kulla
       # Appended, so it runs after ActionDispatch::RemoteIp (and Rack::Attack, if the app uses it).
       app.middleware.use Kulla::VisitEndpoint
       app.middleware.use Kulla::Webhook
+      app.middleware.use Kulla::BeaconInjector
     end
 
     # Opt-in signal integrations. After the app's initializers so `Kulla.configure` has run.

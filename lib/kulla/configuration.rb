@@ -5,7 +5,7 @@ module Kulla
     BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".freeze
     CAPTURE_DEFAULTS = {
       requests: true, errors: true, jobs: true, mail: true, security: true,
-      events: true, deploy: true, heartbeat: true, visits: true,
+      events: true, deploy: true, heartbeat: true, visits: true, beacon: true,
       queries: true, http: true, cache: true, llm: true, logs: true, activity: true, browser_errors: true, csp: true
     }.freeze
     # Tunables Kulla can change remotely (manifest "config"); an app's own setting wins.
