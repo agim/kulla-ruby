@@ -3,6 +3,7 @@ module Kulla
     initializer "kulla.visit_endpoint" do |app|
       # Appended, so it runs after ActionDispatch::RemoteIp (and Rack::Attack, if the app uses it).
       app.middleware.use Kulla::VisitEndpoint
+      app.middleware.use Kulla::Webhook
     end
 
     # Opt-in signal integrations. After the app's initializers so `Kulla.configure` has run.

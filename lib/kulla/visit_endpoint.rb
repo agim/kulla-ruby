@@ -41,6 +41,9 @@ module Kulla
 
         ua = env["HTTP_USER_AGENT"].to_s
         attrs = self.class.visit_attrs(data, ua: ua, visitor: visitor(ip(env), ua))
+        # A truncated IP (/24, /48) so Kulla can resolve a country from its local database; Kulla drops it at ingest.
+        prefix = self.class.ip_prefix(ip(env))
+        attrs["ip_prefix"] = prefix if prefix
         client.track("visit", attrs, scrub: false) if attrs["path"]
       rescue StandardError => e
         Kulla.log("visit endpoint failed: #{e.class}: #{e.message}")
@@ -122,6 +125,14 @@ module Kulla
       end
 
       class << self
+        # 203.0.113.9 -> 203.0.113.0; 2001:db8:abcd:12::1 -> 2001:db8:abcd::
+        def ip_prefix(ip)
+          addr = IPAddr.new(ip.to_s)
+          addr.mask(addr.ipv4? ? 24 : 48).to_s
+        rescue IPAddr::Error, ArgumentError
+          nil
+        end
+
         # "https://app.com/assets/application-3f9a1c2b.js:1:2345" -> "/assets/application.js:1:2345"
         def clean_frame(line) = line.to_s.gsub(ORIGIN, "").gsub(DIGEST, "")[0, 300]
 

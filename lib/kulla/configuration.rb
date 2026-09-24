@@ -69,7 +69,14 @@ module Kulla
 
     def token
       return @token if defined?(@token)
-      @token = presence(rails_credential_token) || presence(ENV["KULLA_TOKEN"])
+      @token = presence(rails_credential(:token)) || presence(ENV["KULLA_TOKEN"])
+    end
+
+    # Shared secret for Kulla's signal webhook (Kulla::Webhook); nil keeps the endpoint off.
+    attr_writer :webhook_secret
+    def webhook_secret
+      return @webhook_secret if defined?(@webhook_secret)
+      @webhook_secret = presence(rails_credential(:webhook_secret)) || presence(ENV["KULLA_WEBHOOK_SECRET"])
     end
 
     # Where Kulla runs. No default: set it in an initializer or KULLA_URL.
@@ -176,9 +183,9 @@ module Kulla
         defined?(Rails) && Rails.respond_to?(:application) && !Rails.application.nil?
       end
 
-      def rails_credential_token
+      def rails_credential(key)
         return unless rails_app? && Rails.application.respond_to?(:credentials)
-        Rails.application.credentials.dig(:kulla, :token)
+        Rails.application.credentials.dig(:kulla, key)
       rescue StandardError
         nil
       end

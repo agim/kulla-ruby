@@ -92,7 +92,7 @@ end
 | `csp` | Content-Security-Policy violation reports sent to `/kulla/csp` (below). |
 | `deploy` | Once per server boot: revision, Ruby/Rails/gem versions, env var **names**, pending migrations, Solid Queue recurring tasks (so Kulla notices a scheduled job that didn't run). |
 | `heartbeat` | Every 60 s: which process (`pid`, `role`: web/job/task, process name, boot time, SDK version), RSS, threads, DB pool, Solid Queue counts, Puma stats, disk, load. |
-| `visit` | `kulla_beacon_tag` (see below). The same tag reports JavaScript errors and unhandled promise rejections as `error` events with `source: browser` (at most 5 per page). |
+| `visit` | `kulla_beacon_tag` (see below). The same tag reports JavaScript errors and unhandled promise rejections as `error` events with `source: browser` (at most 5 per page). Visits carry `ip_prefix`, a /24 or /48 of the visitor's IP that Kulla turns into a country at ingest and never stores. |
 | anything | `Rails.event.notify` structured events (Rails 8.1), and any ActiveSupport notification Kulla asks for by name. |
 
 Kulla can switch each of these on or off, and change the thresholds, per app from its dashboard
@@ -112,6 +112,24 @@ always wins over Kulla's.
   `subject`, recipients, `params`, `key` and similar fields. To refuse all of them: `c.notifications = []`.
 - **Still yours to check:** log lines that print whole records or custom identifiers. Content scrubbing
   catches the common shapes, not everything. Add app-specific keys to `filter_parameters`.
+
+### Invalid emails at signup
+
+```ruby
+# a syntax check plus "can this domain receive mail" (DNS MX, else A/AAAA), cached per domain for an hour
+if Kulla.email_valid?(params[:email])
+```
+
+An address whose domain can't receive mail is reported to Kulla as an `email.invalid` signal, active at
+once for every app, and an address Kulla already knows as invalid is refused without a lookup. A DNS
+failure counts as valid, so resolver trouble never blocks a signup.
+
+### Signal webhook (optional; polling stays)
+
+In Kulla, App › Settings › Signal webhook takes `https://<your app>/kulla/signals`; Kulla generates a
+secret (shown once). Put it in credentials as `kulla.webhook_secret` (or `KULLA_WEBHOOK_SECRET`). The
+gem mounts `/kulla/signals`, verifies Kulla's `X-Kulla-Signature` (HMAC-SHA256, 5-minute tolerance) and
+syncs signals at once instead of at the next minute's poll. Without a secret the endpoint answers 404.
 
 ### Security events and CSP reports
 

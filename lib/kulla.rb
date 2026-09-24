@@ -20,6 +20,8 @@ require_relative "kulla/fork_hook"
 require_relative "kulla/visit_endpoint"
 require_relative "kulla/signal_blocker"
 require_relative "kulla/mail_interceptor"
+require_relative "kulla/email_check"
+require_relative "kulla/webhook"
 require_relative "kulla/helper"
 require_relative "kulla/subscribers/errors"
 require_relative "kulla/subscribers/requests"
@@ -78,6 +80,12 @@ module Kulla
     rescue StandardError => e
       log("signal? failed: #{e.class}: #{e.message}")
       false
+    end
+
+    # Kulla.email_valid?("x@example.com"): syntax + can the domain receive mail (DNS), sharing invalid
+    # addresses with every app as email.invalid signals. See EmailCheck.
+    def email_valid?(address)
+      EmailCheck.valid?(address)
     end
 
     # Tell Kulla what this app saw: Kulla.report_signal("ip.blocked", ip, reason: "wp-login scan").

@@ -184,6 +184,9 @@ module Kulla
       event
     end
 
+    # A signals sync as soon as the worker wakes (the webhook asks for this).
+    def sync_now = defer { sync_signals }
+
     # Runs a block on the worker thread (used for boot work that may touch the database).
     def defer(&block)
       return unless config.enabled?
