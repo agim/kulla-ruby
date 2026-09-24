@@ -6,16 +6,28 @@ module Kulla
       SKIP_PATH = %r{\A/(?:up/?\z|assets/|rails/active_storage/|cable(?:/|\z))}
       BOT_UA = /bot\b|crawl|spider|slurp|headless|lighthouse|facebookexternalhit|embedly|preview|monitor|uptime|curl\/|wget\/|python-requests|go-http-client|httpclient|okhttp/i
 
+      START = "start_processing.action_controller".freeze
+
       def self.subscribe(client)
+        ActiveSupport::Notifications.subscribe(START) do |_name, _start, _finish, _id, payload|
+          request = payload[:request]
+          Context.start(trace: (request.request_id if request.respond_to?(:request_id)),
+                        label: [ payload[:controller], payload[:action] ].compact.join("#").then { |l| l.empty? ? nil : l })
+        rescue StandardError
+          nil
+        end
         ActiveSupport::Notifications.subscribe(EVENT) do |event|
-          track(client, event)
+          ctx = Context.finish
+          track(client, event, ctx)
         end
       end
 
-      def self.track(client, event)
+      def self.track(client, event, ctx = nil)
+        Subscribers::Sql.report_n_plus_one(client, ctx)
         return unless client.config.capture?(:requests)
         attrs, trace = attrs_for(event.payload, event.duration)
         return if attrs.nil?
+        attrs.merge!(ctx.counters) if ctx
 
         level = attrs["status"].to_i >= 500 ? :error : :info
         client.track("request", attrs, trace: trace, level: level, scrub: false)

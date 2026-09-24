@@ -25,7 +25,8 @@ module Kulla
           "handled" => handled ? true : false,
           "severity" => severity.to_s,
           "source" => source&.to_s,
-          "context" => config.scrubber.call(extracted.merge(context))
+          "context" => config.scrubber.call(extracted.merge(context)),
+          "breadcrumbs" => (Context.current || Context.last)&.breadcrumbs&.dup.then { |b| b.nil? || b.empty? ? nil : b }
         }.compact
         [ attrs, trace ]
       end
@@ -62,6 +63,10 @@ module Kulla
             trace = request.request_id if request.respond_to?(:request_id)
             extracted["path"] = request.path if request.respond_to?(:path)
             extracted["method"] = request.request_method if request.respond_to?(:request_method)
+            if request.respond_to?(:filtered_parameters)
+              params = request.filtered_parameters.except("controller", "action", "format")
+              extracted["params"] = params unless params.empty?
+            end
           end
         end
 

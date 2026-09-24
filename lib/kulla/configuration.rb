@@ -5,8 +5,11 @@ module Kulla
     BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".freeze
     CAPTURE_DEFAULTS = {
       requests: true, errors: true, jobs: true, mail: true, security: true,
-      events: true, deploy: true, heartbeat: true, visits: true
+      events: true, deploy: true, heartbeat: true, visits: true,
+      queries: true, http: true, cache: true, llm: true, logs: true, activity: true, browser_errors: true, csp: true
     }.freeze
+    # Tunables Kulla can change remotely (manifest "config"); an app's own setting wins.
+    REMOTE_DEFAULTS = { slow_query_ms: 500, n_plus_one: 10, logs_per_minute: 60, notifications: [] }.freeze
     # Rails 8.1 re-emits its own instrumentation as structured events once anything subscribes
     # to Rails.event. Kulla already captures those as request/job/mail, so skip them.
     DEFAULT_IGNORED_EVENTS = %w[
@@ -24,6 +27,8 @@ module Kulla
     #   block_signal_ips    — Rack middleware answers 403 to IPs with an active ip.blocked signal.
     attr_accessor :suppress_bad_emails, :block_signal_ips
     attr_reader :capture
+    # web, job, or whatever Kulla.start!(role:) says; sent with every heartbeat.
+    attr_accessor :process_role
 
     def initialize
       @flush_interval = 5
@@ -35,6 +40,31 @@ module Kulla
       @transport = nil
       @suppress_bad_emails = false
       @block_signal_ips = false
+      @local_capture = []
+      @local = {}
+      @remote = {}
+    end
+
+    REMOTE_DEFAULTS.each_key do |key|
+      define_method(key) { @local.fetch(key) { @remote.fetch(key, REMOTE_DEFAULTS[key]) } }
+      define_method("#{key}=") { |value| @local[key] = value }
+    end
+
+    # Applies the manifest's "config": capture toggles and tunables the app didn't set itself.
+    def apply_remote(remote)
+      return unless remote.is_a?(Hash)
+
+      toggles = remote["capture"].is_a?(Hash) ? remote["capture"] : {}
+      toggles.each do |feature, on|
+        key = feature.to_sym
+        next unless CAPTURE_DEFAULTS.key?(key) && !@local_capture.include?(key)
+        @capture[key] = on ? true : false
+      end
+      REMOTE_DEFAULTS.each do |key, default|
+        value = remote[key.to_s]
+        next if value.nil?
+        @remote[key] = default.is_a?(Array) ? Array(value).map(&:to_s).first(20) : value.to_i
+      end
     end
 
     def token
@@ -110,7 +140,9 @@ module Kulla
 
     # Accepts a partial hash: `c.capture = { heartbeat: false }` keeps the other toggles on.
     def capture=(toggles)
-      @capture = CAPTURE_DEFAULTS.merge(toggles.to_h.transform_keys(&:to_sym))
+      toggles = toggles.to_h.transform_keys(&:to_sym)
+      @local_capture |= toggles.keys
+      @capture = CAPTURE_DEFAULTS.merge(toggles)
     end
 
     def capture?(feature)

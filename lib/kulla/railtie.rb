@@ -26,6 +26,8 @@ module Kulla
 
         client = Kulla.client
         install_subscribers(client, config)
+        config.process_role ||= "web" if server?
+        config.process_role ||= "job" if jobs?
         return if console? || rake?
         # Only a real server or job process asks to join; one-off commands (rails runner, scripts) never do.
         return if config.enrolling? && !(server? || jobs?)
@@ -48,6 +50,13 @@ module Kulla
         Subscribers::Mail.subscribe(client) if config.capture?(:mail)
         Subscribers::Security.subscribe(client) if config.capture?(:security)
         Subscribers::Events.subscribe(client) if config.capture?(:events)
+        # Always installed: each checks its toggle per event, so Kulla can switch them on remotely.
+        Subscribers::Sql.subscribe(client)
+        Subscribers::Cache.subscribe(client)
+        Subscribers::RateLimits.subscribe(client)
+        Subscribers::Http.install
+        Subscribers::Llm.install
+        Subscribers::Logs.install(client)
       end
 
       def install_signal_integrations(app, config)

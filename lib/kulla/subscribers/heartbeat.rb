@@ -6,11 +6,18 @@ module Kulla
 
       @disk = nil
       @disk_checked_at = nil
+      BOOTED_AT = Time.now.utc.iso8601
 
       module_function
 
       def collect(config)
         {
+          # Which process this is, so Kulla can tell a stopped monitor from a busy web worker.
+          "pid" => Process.pid,
+          "role" => config.process_role,
+          "process" => $PROGRAM_NAME.to_s[0, 80],
+          "booted_at" => BOOTED_AT,
+          "sdk" => Kulla::VERSION,
           "rss_mb" => rss_mb,
           "threads" => Thread.list.size,
           "db_pool" => db_pool,

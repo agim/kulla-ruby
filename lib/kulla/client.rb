@@ -34,6 +34,12 @@ module Kulla
       @reports = []
       @reports_retry_at = 0.0
       @approved = !config.enrolling?
+      @activity = Hash.new(0)
+    end
+
+    # One insert into a table (Subscribers::Sql); sent as per-table counts with the heartbeat.
+    def count_activity(table)
+      @lock.synchronize { @activity[table] += 1 }
     end
 
     # False while the app waits for the owner to approve it in Kulla (joining without a token).
@@ -352,8 +358,14 @@ module Kulla
       end
 
       def heartbeat
+        flush_activity
         return unless config.capture?(:heartbeat)
         track("heartbeat", Subscribers::Heartbeat.collect(config), scrub: false)
+      end
+
+      def flush_activity
+        counts = @lock.synchronize { @activity.dup.tap { @activity.clear } }
+        counts.first(50).each { |table, n| track("activity", { "table" => table, "inserts" => n }, scrub: false) }
       end
 
       # Returns [ events, dropped, unsent ]. The loss counters are only cleared once a batch
@@ -424,6 +436,7 @@ module Kulla
         when 200
           @manifest = manifest if manifest.is_a?(Hash)
           @manifest_etag = etag
+          apply_remote_config
           check_sdk_version
         when 401, 403
           if config.enrolling?
@@ -438,6 +451,15 @@ module Kulla
         end
       rescue StandardError => e
         Kulla.log("manifest refresh failed: #{e.class}: #{e.message}")
+      end
+
+      # Kulla's per-app settings: capture toggles, thresholds, extra notifications to record.
+      def apply_remote_config
+        remote = @manifest["config"]
+        config.apply_remote(remote)
+        Subscribers::Generic.sync(self, config.notifications) if defined?(ActiveSupport::Notifications)
+      rescue StandardError => e
+        Kulla.log("remote config failed: #{e.class}: #{e.message}")
       end
 
       # api.md nests versions per language ({"sdk": {"ruby": {...}}}); PLAN.md shows them flat.

@@ -15,10 +15,13 @@ module Kulla
       observe("largest-contentful-paint",function(e){if(!s.soft)s.lcp_ms=Math.round(e.startTime);});
       observe("layout-shift",function(e){if(!e.hadRecentInput)s.cls+=e.value;});
       observe("event",function(e){if(e.interactionId)s.inp_ms=Math.max(s.inp_ms||0,Math.round(e.duration));},{durationThreshold:40});
-      function send(){if(sent)return;sent=true;
-      var body=JSON.stringify({path:s.path,referrer:s.referrer,viewport:innerWidth+"x"+innerHeight,device:device(),lcp_ms:s.lcp_ms,inp_ms:s.inp_ms,cls:Math.round(s.cls*10000)/10000});
-      try{if(navigator.sendBeacon&&navigator.sendBeacon(url,new Blob([body],{type:"text/plain"})))return;
+      function post(body){try{if(navigator.sendBeacon&&navigator.sendBeacon(url,new Blob([body],{type:"text/plain"})))return;
       fetch(url,{method:"POST",body:body,keepalive:true,credentials:"same-origin"});}catch(e){}}
+      function send(){if(sent)return;sent=true;
+      post(JSON.stringify({path:s.path,referrer:s.referrer,viewport:innerWidth+"x"+innerHeight,device:device(),lcp_ms:s.lcp_ms,inp_ms:s.inp_ms,cls:Math.round(s.cls*10000)/10000}));}
+      var errs=0;function report(n,m,st){if(errs++>=5)return;post(JSON.stringify({type:"error",name:String(n||"Error").slice(0,80),message:String(m||"").slice(0,500),stack:String(st||"").slice(0,4000),path:location.pathname,device:device()}));}
+      addEventListener("error",function(e){if(!e.message&&!e.error)return;var x=e.error||{};report(x.name,e.message||x.message,x.stack||(e.filename+":"+e.lineno+":"+e.colno));});
+      addEventListener("unhandledrejection",function(e){var r=e.reason||{};report(r.name||"UnhandledRejection",r.message||r,r.stack);});
       addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")send();});
       addEventListener("pagehide",send);
       document.addEventListener("turbo:visit",send);

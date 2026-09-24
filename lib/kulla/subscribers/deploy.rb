@@ -19,7 +19,8 @@ module Kulla
           "rails" => defined?(Rails.version) ? Rails.version : nil,
           "gems" => gems,
           "env_names" => ENV.keys.sort,
-          "pending_migrations" => pending_migrations
+          "pending_migrations" => pending_migrations,
+          "recurring" => recurring
         }.compact
       end
 
@@ -28,6 +29,17 @@ module Kulla
         Bundler.load.specs.map { |spec| [ spec.name, spec.version.to_s ] }.sort.first(GEM_LIMIT).to_h
       rescue StandardError
         {}
+      end
+
+      # Solid Queue's recurring tasks, so Kulla can spot a scheduled job that didn't run.
+      def recurring
+        return unless defined?(::SolidQueue::RecurringTask)
+        tasks = ::SolidQueue::RecurringTask.all.map do |t|
+          { "key" => t.key, "class" => t.class_name, "command" => t.command&.first(120), "schedule" => t.schedule }.compact
+        end
+        tasks.empty? ? nil : tasks.first(100)
+      rescue StandardError, ScriptError
+        nil
       end
 
       def pending_migrations

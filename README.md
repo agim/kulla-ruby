@@ -79,15 +79,35 @@ end
 
 | Stream | From |
 |---|---|
-| `request` | `process_action.action_controller`: route template, status, durations, controller/action, IP, UA. Skips `/up`, `/assets`, Active Storage, `/cable`. |
-| `error` | `Rails.error` (everything Rails reports, handled or not): class, message, 50 backtrace frames, context. |
-| `job` | `perform.active_job`: class, queue, duration, result, attempts. |
+| `request` | `process_action.action_controller`: route template, status, durations, controller/action, IP, UA, bot flag, and per-request counts: `queries`, `cache_hits`, `cache_misses`, `http_calls`. Skips `/up`, `/assets`, Active Storage, `/cable`. |
+| `error` | `Rails.error` (everything Rails reports, handled or not): class, message, 50 backtrace frames, context, filtered `params`, `user_id` (never an email), and `breadcrumbs`: the last 20 queries, HTTP calls, AI calls and warnings before it. |
+| `job` | `perform.active_job`: class, queue, duration, result, attempts, `queue_wait_ms` (enqueued → started), query counts. |
+| `query` | `kind: slow`: statements over `slow_query_ms` (default 500). `kind: n_plus_one`: the same SELECT at least `n_plus_one` times (default 10) in one request or job. SQL is normalized (every literal becomes `?`), so no values leave the app. |
+| `http` | Outgoing HTTP through Net::HTTP (and Faraday's default adapter): host, method, path (no query string), status, duration, error class. |
+| `llm` | RubyLLM completions: provider, model, input/output tokens, duration, `cost_usd` when the model's price is known. Prompts and replies are never sent. |
+| `activity` | Inserts per table, sent every minute: signups, orders, messages… with no code. Internal tables (Solid Queue/Cache/Cable, sessions, schema) are skipped. |
+| `log` | Warn, error and fatal log lines (at most `logs_per_minute`, default 60). |
 | `mail` | `deliver.action_mailer`: mailer, message id, first recipient. |
-| `security` | Rack::Attack blocklist/throttle/track notifications. |
-| `deploy` | Once per server boot: revision, Ruby/Rails/gem versions, env var **names**, pending migrations. |
-| `heartbeat` | Every 60 s: RSS, threads, DB pool, Solid Queue counts, Puma stats, disk, load. |
-| `visit` | `kulla_beacon_tag` (see below). |
-| anything | `Rails.event.notify` structured events (Rails 8.1). |
+| `security` | Rack::Attack blocklist/throttle/track notifications, Rails 8 `rate_limit` hits, and `Kulla.security` (below). |
+| `csp` | Content-Security-Policy violation reports sent to `/kulla/csp` (below). |
+| `deploy` | Once per server boot: revision, Ruby/Rails/gem versions, env var **names**, pending migrations, Solid Queue recurring tasks (so Kulla notices a scheduled job that didn't run). |
+| `heartbeat` | Every 60 s: which process (`pid`, `role`: web/job/task, process name, boot time, SDK version), RSS, threads, DB pool, Solid Queue counts, Puma stats, disk, load. |
+| `visit` | `kulla_beacon_tag` (see below). The same tag reports JavaScript errors and unhandled promise rejections as `error` events with `source: browser` (at most 5 per page). |
+| anything | `Rails.event.notify` structured events (Rails 8.1), and any ActiveSupport notification Kulla asks for by name. |
+
+Kulla can switch each of these on or off, and change the thresholds, per app from its dashboard
+(the manifest's `config`), without a new gem release or a deploy. A setting in your initializer
+always wins over Kulla's.
+
+### Security events and CSP reports
+
+```ruby
+# a failed login, a blocked signup, anything your app decides is a security event
+Kulla.security("login_failed", ip: request.remote_ip, path: request.path)
+
+# config/initializers/content_security_policy.rb
+policy.report_uri "/kulla/csp"
+```
 
 Every event carries `env`, `host`, `release` and `ts`. Attributes are scrubbed with your
 `filter_parameters`; keys that look like credentials (authorization, cookie, password, secret,
