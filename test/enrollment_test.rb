@@ -73,6 +73,20 @@ class EnrollmentTest < Minitest::Test
     assert_equal "shop.example-store.com", sent[:headers]["X-Kulla-Site"]
   end
 
+  def test_joining_without_a_site_says_so_once
+    config = enrolling_config
+    lines = []
+    previous = Kulla.config.logger
+    Kulla.config.logger = Struct.new(:lines) { def warn(m) = lines << m; def info(_m) = nil; def debug(_m) = nil }.new(lines)
+    adapter = EnrollAdapter.new([ "pending", "pending" ])
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    2.times { client.send(:check_approval) }
+    assert_equal 1, lines.count { |l| l.include?("no site detected") }, lines.inspect
+    assert_includes lines.first, '"Shop"'
+  ensure
+    Kulla.config.logger = previous
+  end
+
   def test_placeholder_hosts_never_become_the_site
     assert_nil Kulla::Configuration.hostname("example.com")
     assert_nil Kulla::Configuration.hostname("www.example.org")

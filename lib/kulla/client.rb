@@ -334,6 +334,10 @@ module Kulla
 
       # One POST /api/v1/enroll. Returns the state; once approved, keeps the issued token in memory.
       def check_approval
+        unless config.site || @told_no_site
+          Kulla.log("no site detected, so this app joins as #{config.app_name.inspect}; set the mailer host in production.rb or KULLA_SITE to name it by its domain", level: :warn)
+          @told_no_site = true
+        end
         state, token = transport.enroll
         state = "pending" if state == "approved" && token.to_s.empty?
         case state

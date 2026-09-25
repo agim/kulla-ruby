@@ -144,7 +144,7 @@ module Kulla
 
     def release
       return @release if defined?(@release)
-      @release = presence(ENV["KULLA_RELEASE"]) || presence(ENV["REVISION"]) || presence(ENV["GIT_SHA"]) ||
+      @release = presence(ENV["KULLA_RELEASE"]) || presence(ENV["REVISION"]) || presence(ENV["GIT_SHA"]) || presence(ENV["KAMAL_VERSION"]) ||
                  revision_file || git_revision
     end
 

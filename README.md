@@ -63,7 +63,7 @@ Kulla.configure do |c|
   c.enroll = true                             # default: no token and Rails.env.production?
   c.site = "shop.example.com"                 # ENV["KULLA_SITE"]; default: the host Rails builds URLs with
   c.app_name = "shop.example.com"             # ENV["KULLA_APP_NAME"]; default: the site, else the Rails app module
-  c.release = ENV["GIT_SHA"]                  # KULLA_RELEASE, REVISION, GIT_SHA, REVISION file, git
+  c.release = ENV["GIT_SHA"]                  # KULLA_RELEASE, REVISION, GIT_SHA, KAMAL_VERSION, REVISION file, git
   c.enabled = Rails.env.production?           # default: endpoint and token (or enrollment) present, env != test
   c.flush_interval = 5                        # seconds
   c.batch_size = 500
@@ -196,6 +196,16 @@ your initializers.
 Apps that use `rack_attack_abuseipdb` with its `:kulla` provider don't need `block_signal_ips`: that
 gem already pulls the `ip.blocked` signals into its blocklist (shared across processes through the
 cache) and reports the IPs it blocks.
+
+## Naming
+
+Kulla names apps by their domain. The name is, in order: `c.app_name` when set, `KULLA_APP_NAME`, the
+**site**, the Rails application module, the directory name. The site is `c.site`, `KULLA_SITE`, or the
+host Rails builds URLs with: Action Mailer's `default_url_options[:host]`, then the routes', then Action
+Controller's. Placeholders never count (`example.com`, `localhost`, `.test`, `.local`), so an app whose
+`production.rb` still has the generator's `host: "example.com"` enrols under its module name (`Shop`):
+set the real mailer host and it names itself. The site also travels as `X-Kulla-Site` on every request,
+and Kulla renames an app still carrying a module-style name after it; a domain name the owner chose stays.
 
 ## Page visits
 
