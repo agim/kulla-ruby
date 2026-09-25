@@ -58,6 +58,15 @@ module Kulla
       @config = config
       @adapter = adapter || NetHttpAdapter.new(config.timeout)
       @sleeper = sleeper || ->(seconds) { sleep(seconds) }
+      @auth_rejected = false
+    end
+
+    # True once, after Kulla answered an events POST with 401 or 403 since the last check: the token
+    # was revoked (the owner detached this install) and the client should ask to join again.
+    def auth_rejected?
+      was = @auth_rejected
+      @auth_rejected = false
+      was
     end
 
     def self.encode_line(event)
@@ -183,6 +192,7 @@ module Kulla
             log_rejections(response)
             return 0
           elsif code && code != 429 && code.between?(400, 499)
+            @auth_rejected = true if [ 401, 403 ].include?(code)
             Kulla.log("POST #{path} returned #{code}, dropping #{count} events: #{response.body.to_s[0, 200]}",
                       level: [ 401, 403 ].include?(code) ? :warn : :debug)
             return count

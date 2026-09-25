@@ -205,6 +205,7 @@ module Kulla
 
           lost = transport.deliver(batch, retries: retries, **events_endpoint)
           settle_losses(lost, dropped, unsent)
+          token_rejected if transport.auth_rejected?
           # A failed delivery means Kulla is down or refusing; wait for the next interval.
           break if lost.positive? || (deadline && monotonic > deadline)
         end
@@ -332,6 +333,20 @@ module Kulla
         end
       end
 
+      # Kulla refused the token (401/403 on the manifest or an events POST). An issued token was revoked,
+      # for example the owner detached this install: forget it and ask to join again at once. A
+      # configured token is the app's to fix.
+      def token_rejected(status = 401)
+        if config.enrolling? || (config.token.nil? && config.issued_token)
+          config.issued_token = nil
+          @approved = false
+          @told_pending = false
+          Kulla.log("Kulla no longer accepts this app's token; asking to join again", level: :warn)
+        else
+          Kulla.log("Kulla returned #{status}; check the Kulla token", level: :warn)
+        end
+      end
+
       # One POST /api/v1/enroll. Returns the state; once approved, keeps the issued token in memory.
       def check_approval
         unless config.site || @told_no_site
@@ -446,15 +461,7 @@ module Kulla
           apply_remote_config
           check_sdk_version
         when 401, 403
-          if config.enrolling?
-            # The issued token was revoked: forget it and ask to join again.
-            config.issued_token = nil
-            @approved = false
-            @told_pending = false
-            Kulla.log("Kulla no longer accepts this app's token; asking to join again", level: :warn)
-          else
-            Kulla.log("manifest request returned #{status}; check the Kulla token", level: :warn)
-          end
+          token_rejected(status)
         end
       rescue StandardError => e
         Kulla.log("manifest refresh failed: #{e.class}: #{e.message}")

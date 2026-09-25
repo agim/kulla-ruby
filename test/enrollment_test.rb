@@ -134,6 +134,26 @@ class EnrollmentTest < Minitest::Test
     client&.stop
   end
 
+  def test_a_401_on_an_events_post_drops_the_issued_token_and_asks_again
+    config = enrolling_config
+    adapter = EnrollAdapter.new([ "approved", "pending" ])
+    adapter.instance_variable_get(:@responses).push(401)
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    client.send(:check_approval)
+    assert client.approved?
+
+    client.track("log", { "n" => 1 })
+    client.flush
+    refute client.approved?, "the revoked token is forgotten at once"
+    assert_nil config.issued_token
+    assert_nil config.auth_token
+
+    assert_equal "pending", client.send(:check_approval)
+    assert_equal 2, adapter.enrolls.size, "it asked to join again"
+  ensure
+    client&.stop
+  end
+
   def test_the_install_key_is_not_a_token
     assert_match(/\Akli_/, enrolling_config.enrollment_key)
     config = Kulla::Configuration.new
