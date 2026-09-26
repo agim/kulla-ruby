@@ -68,6 +68,21 @@ class VisitEndpointTest < Minitest::Test
     assert_empty visits
   end
 
+  def test_browser_errors_carry_the_browser_family_and_a_bot_flag
+    family = ->(ua) { Kulla::VisitEndpoint.browser_family(ua) }
+    assert_equal "Chrome 140", family.call(CHROME)
+    assert_equal "Safari 18", family.call("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+    assert_equal "Firefox 130", family.call("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0")
+    assert_equal "Googlebot", family.call("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+    assert_equal "HeadlessChrome 128", family.call("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/128.0.0.0 Safari/537.36")
+    assert_nil family.call("")
+
+    beacon({ type: "error", name: "TypeError", message: "x", path: "/p" }, "HTTP_USER_AGENT" => "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+    @client.flush
+    error = @adapter.events.find { |e| e["stream"] == "error" }
+    assert_equal({ "path" => "/p", "browser" => "Googlebot", "bot" => true }, error["attrs"]["context"])
+  end
+
   def test_frames_keep_no_tokens_queries_or_origins
     clean = ->(line) { Kulla::VisitEndpoint.clean_frame(line) }
     assert_equal "handleClick@/q/:token:412:17", clean.call("handleClick@https://portal.example/q/op4xfzpUjX9ab2cdEFqU-8a:412:17")

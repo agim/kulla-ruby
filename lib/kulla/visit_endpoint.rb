@@ -38,7 +38,7 @@ module Kulla
 
         data, size = parse(env["rack.input"])
         return if data.nil?
-        return record_browser_error(client, data) if data["type"] == "error"
+        return record_browser_error(client, data, ua: env["HTTP_USER_AGENT"].to_s) if data["type"] == "error"
         return if size > MAX_BODY_BYTES
 
         ua = env["HTTP_USER_AGENT"].to_s
@@ -52,7 +52,7 @@ module Kulla
       end
 
       # A JavaScript error or unhandled rejection from the page -> `error` with source "browser".
-      def record_browser_error(client, data)
+      def record_browser_error(client, data, ua: "")
         return unless client.config.capture?(:browser_errors)
         name = Scrubber.clean_string(data["name"].to_s[/\A[\w.$]{1,80}/] || "Error", 80)
         message = Scrubber.clean_content(data["message"].to_s, 500)
@@ -60,7 +60,8 @@ module Kulla
                               .reject { |l| l.start_with?(name) && l.include?(message[0, 20].to_s) }
                               .first(20).map { |l| self.class.clean_frame(l) }
         attrs = { "class" => name, "message" => message, "backtrace" => frames, "handled" => false, "severity" => "error",
-                  "source" => "browser", "context" => { "path" => self.class.send(:local_path, data["path"]), "device" => DEVICES.include?(data["device"]) ? data["device"] : nil }.compact }
+                  "source" => "browser", "context" => { "path" => self.class.send(:local_path, data["path"]), "device" => DEVICES.include?(data["device"]) ? data["device"] : nil,
+                                                       "browser" => self.class.browser_family(ua), "bot" => (true if Subscribers::Requests::BOT_UA.match?(ua)) }.compact }
         client.track("error", attrs, level: :error, message: "#{name}: #{message}", scrub: false)
       end
 
@@ -139,6 +140,27 @@ module Kulla
         # A stack frame keeps only its path, line and column: the origin, asset digests, any query string
         # and token-looking path segments go, since the page URL is often the credential (portal links,
         # password resets) and inline-script frames carry it verbatim.
+        # The browser family from a user agent ("Chrome 140", "Safari 18", "Googlebot", "HeadlessChrome"),
+        # never the raw string: enough to tell a crawler or a headless run from people.
+        BROWSERS = [
+          [ /Googlebot|bingbot|DuckDuckBot|Baiduspider|YandexBot|Applebot|facebookexternalhit|Twitterbot|LinkedInBot|Slackbot/i, nil ],
+          [ /HeadlessChrome\/(\d+)/, "HeadlessChrome" ], [ /Lighthouse/i, "Lighthouse" ], [ /Edg(?:e|A|iOS)?\/(\d+)/, "Edge" ],
+          [ /OPR\/(\d+)/, "Opera" ], [ /SamsungBrowser\/(\d+)/, "Samsung Internet" ], [ /Firefox\/(\d+)|FxiOS\/(\d+)/, "Firefox" ],
+          [ /CriOS\/(\d+)/, "Chrome" ], [ /Chrome\/(\d+)/, "Chrome" ], [ /Version\/(\d+)[\d.]* .*Safari/, "Safari" ], [ /Safari\/(\d+)/, "Safari" ]
+        ].freeze
+
+        def browser_family(ua)
+          ua = ua.to_s
+          return nil if ua.empty?
+          BROWSERS.each do |pattern, family|
+            match = pattern.match(ua) or next
+            return match[0][/\A[A-Za-z]+/] if family.nil?
+            version = match.captures.compact.first
+            return version ? "#{family} #{version}" : family
+          end
+          ua[/\A[A-Za-z][\w.-]{1,30}/] || "other"
+        end
+
         def clean_frame(line)
           text = line.to_s.gsub(ORIGIN, "").gsub(DIGEST, "").gsub(FRAME_QUERY, "").gsub(FRAME_TOKEN, ":token")
           Scrubber.clean_content(text, 300)
