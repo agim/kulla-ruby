@@ -91,6 +91,16 @@ class CollectorsTest < Minitest::Test
     assert_equal({ "provider" => "anthropic", "model" => "claude-haiku-4-5", "input_tokens" => 1000, "output_tokens" => 200, "cost_usd" => 0.002 }, llm.except("duration_ms"))
   end
 
+  def test_llm_calls_read_ruby_llm_2_token_counts
+    model = Struct.new(:id, :provider, :input_price_per_million, :output_price_per_million).new("claude-haiku-4-5", "anthropic", 1.0, 5.0)
+    chat = Struct.new(:model).new(model)
+    counts = Struct.new(:input, :output).new(1000, 200)
+    message = Struct.new(:tokens, :model, :content).new(counts, "claude-haiku-4-5", "secret reply")
+    Kulla.stub(:client, @client) { Kulla::Subscribers::Llm.record(chat, message, Process.clock_gettime(Process::CLOCK_MONOTONIC), nil) }
+    llm = events("llm").first["attrs"]
+    assert_equal({ "provider" => "anthropic", "model" => "claude-haiku-4-5", "input_tokens" => 1000, "output_tokens" => 200, "cost_usd" => 0.002 }, llm.except("duration_ms"))
+  end
+
   def test_outgoing_http_is_recorded_without_query_strings
     req = Net::HTTP::Get.new("/v3/charges?api_key=sekret")
     http = Net::HTTP.new("api.stripe.com", 443)

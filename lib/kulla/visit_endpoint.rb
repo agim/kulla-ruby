@@ -149,9 +149,16 @@ module Kulla
           [ /CriOS\/(\d+)/, "Chrome" ], [ /Chrome\/(\d+)/, "Chrome" ], [ /Version\/(\d+)[\d.]* .*Safari/, "Safari" ], [ /Safari\/(\d+)/, "Safari" ]
         ].freeze
 
+        # A crawler that renders with a real browser puts its own name in the user agent after the browser
+        # ("… Chrome/145 Safari/537.36 (compatible; meta-externalagent/1.1; +https://…)"): that name wins.
+        CRAWLER_TOKEN = %r{\b([A-Za-z][\w.-]*?(?:bot|spider|crawler|agent|fetcher|externalhit))/[\d.]+}i
+
         def browser_family(ua)
           ua = ua.to_s
           return nil if ua.empty?
+          if (named = CRAWLER_TOKEN.match(ua))
+            return named[1] unless named[1].casecmp?("user-agent")
+          end
           BROWSERS.each do |pattern, family|
             match = pattern.match(ua) or next
             return match[0][/\A[A-Za-z]+/] if family.nil?

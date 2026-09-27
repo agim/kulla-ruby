@@ -1,3 +1,5 @@
+require "etc"
+
 module Kulla
   module Subscribers
     # Process and infrastructure stats, collected on the worker thread every 60 seconds.
@@ -25,7 +27,18 @@ module Kulla
           "puma" => puma,
           "disk_pct" => disk_pct(config.root),
           "load" => load_average
-        }.compact
+        }.merge(host_stats).compact
+      end
+
+      # The machine, not the process: CPU count, 5- and 15-minute load, and memory, so Kulla can tell
+      # whether a server is the right size for what runs on it. Linux only; nil elsewhere.
+      def host_stats
+        loads = File.read("/proc/loadavg").split
+        mem = File.foreach("/proc/meminfo").first(8).to_h { |l| k, v = l.split(":"); [ k, v.to_i ] }
+        { "cpus" => Etc.nprocessors, "load5" => loads[1].to_f, "load15" => loads[2].to_f,
+          "mem_total_mb" => (mem["MemTotal"] / 1024.0).round, "mem_available_mb" => (mem["MemAvailable"] / 1024.0).round }
+      rescue StandardError
+        {}
       end
 
       def rss_mb

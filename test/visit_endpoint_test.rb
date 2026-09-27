@@ -75,6 +75,9 @@ class VisitEndpointTest < Minitest::Test
     assert_equal "Firefox 130", family.call("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0")
     assert_equal "Googlebot", family.call("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
     assert_equal "HeadlessChrome 128", family.call("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/128.0.0.0 Safari/537.36")
+    assert_equal "meta-externalagent", family.call("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 (compatible; meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))")
+    assert_equal "GPTBot", family.call("Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)")
+    assert_equal "Chrome 140", family.call("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
     assert_nil family.call("")
 
     beacon({ type: "error", name: "TypeError", message: "x", path: "/p" }, "HTTP_USER_AGENT" => "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")

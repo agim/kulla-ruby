@@ -132,6 +132,10 @@ class SubscribersTest < Minitest::Test
     if File.exist?("/proc/self/status")
       assert_operator attrs["rss_mb"], :>, 0
       assert_kind_of Float, attrs["load"]
+      assert_operator attrs["cpus"], :>=, 1
+      assert_kind_of Float, attrs["load15"]
+      assert_operator attrs["mem_total_mb"], :>, 0
+      assert_operator attrs["mem_available_mb"], :<=, attrs["mem_total_mb"]
     end
     JSON.generate(attrs)
   end
