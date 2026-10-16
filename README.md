@@ -4,8 +4,8 @@ Sends application logs from a Rails 8.x app to Kulla and keeps a copy of Kulla's
 dependencies beyond the Ruby stdlib; the Rails integration is a Railtie that loads only when Rails is
 present. Capture failures never raise into your app; delivery failures retain logs on disk for retry.
 
-Version 0.7 defaults to durable disk buffering and fifteen-minute log batches.
-Deploy the PostgreSQL collector first, retain current tokens, then update the
+Version 0.7.2 defaults to durable disk buffering and fifteen-minute log batches.
+Deploy Kulla’s batched telemetry update first, retain current tokens, then update the
 gem lockfile. See [durable log collection](docs/log-collector.md) for persistent
 volume requirements, retries and explicit flushing.
 
@@ -77,7 +77,7 @@ Kulla.configure do |c|
   c.spool_max_bytes = 64 * 1_048_576          # the spool's pending bytes; the same drop-oldest rule past it
   c.timeout = 15                              # seconds, per HTTP request
   c.filter_parameters += [ :iban ]            # defaults to Rails.application.config.filter_parameters
-  c.capture = { beacon: true, visits: true }  # merged into the defaults; see "What's captured" for which start off
+  c.capture = { beacon: true, visits: true }  # merged into the defaults; see "What's captured" for the enabled collectors
   c.suppress_bad_emails = true                # opt-in, see "Signals" (default false)
   c.block_signal_ips = true                   # opt-in, see "Signals" (default false)
 end
@@ -93,13 +93,13 @@ end
 | `query` | `kind: slow`: statements over `slow_query_ms` (default 500). `kind: n_plus_one`: the same SELECT at least `n_plus_one` times (default 10) in one request or job. SQL is normalized (every literal becomes `?`), so no values leave the app. |
 | `http` | Outgoing HTTP through Net::HTTP (and Faraday's default adapter): host, method, path (no query string), status, duration, error class. |
 | `llm` | RubyLLM completions: provider, model, input/output tokens, duration, `cost_usd` when the model's price is known. Prompts and replies are never sent. |
-| `activity` | Inserts per table, sent every minute: signups, orders, messages… with no code. Internal tables (Solid Queue/Cache/Cable, sessions, schema) are skipped. |
-| `log` | Warn, error and fatal log lines (at most `logs_per_minute`, default 60). |
+| `activity` | Inserts per table, accumulated into the next batch: signups, orders, messages… with no code. Internal tables (Solid Queue/Cache/Cable, sessions, schema) are skipped. |
+| `log` | INFO and higher application log lines, retained in the bounded durable spool. |
 | `mail` | `deliver.action_mailer`: mailer, message id, first recipient. |
 | `security` | Rack::Attack blocklist/throttle/track notifications, Rails 8 `rate_limit` hits, and `Kulla.security` (below). |
 | `csp` | Content-Security-Policy violation reports sent to `/kulla/csp` (below). |
 | `deploy` | Once per server boot: revision, Ruby/Rails/gem versions, env var **names**, pending migrations, Solid Queue recurring tasks (so Kulla notices a scheduled job that didn't run). |
-| `heartbeat` | Every 60 s: which process (`pid`, `role`: web/job/task, process name, boot time, SDK version), RSS, threads, DB pool, Solid Queue counts, Puma stats, disk, load. |
+| `heartbeat` | Once per fifteen-minute upload interval by default: which process (`pid`, `role`: web/job/task, process name, boot time, SDK version), RSS, threads, DB pool, Solid Queue counts, Puma stats, disk, load. |
 | `visit` | `kulla_beacon_tag` (see below). The same tag reports JavaScript errors and unhandled promise rejections as `error` events with `source: browser` (at most 5 per page). Visits carry `ip_prefix`, a /24 or /48 of the visitor's IP that Kulla turns into a country at ingest and never stores. |
 | anything | `Rails.event.notify` structured events (Rails 8.1), and any ActiveSupport notification Kulla asks for by name. |
 
@@ -218,12 +218,11 @@ and Kulla renames an app still carrying a module-style name after it; a domain n
 
 Nothing to add: `Kulla::BeaconInjector` middleware puts the beacon into every full HTML page (200,
 `text/html`, GET, not a Turbo Frame/Stream or XHR response, not a streamed body), with your CSP nonce
-when the page has one, once per page. From 0.7.0 visits and the beacon are **off by default**, like heartbeats and the
-query, cache, HTTP, LLM and activity collectors. Turn them on with `c.capture = { beacon: true, visits: true }`
-(Kulla can also turn them on or off per app), and use `<%= kulla_beacon_tag %>` in a layout if you prefer
-to place it yourself (the two never double up: the script checks `window.__kulla`). 0.5.1 to 0.6.5
-injected the beacon by default; an app upgrading from those that wants to keep counting visits sets both
-options. A CSP with `script-src` and no nonce blocks the injected script in the browser, so visits stay at
+when the page has one, once per page. Visits and the beacon are enabled by default in 0.7.2,
+along with runtime, query, cache, HTTP, LLM and activity capture. Explicit initializer
+settings and remote app capture settings are honored. Use `<%= kulla_beacon_tag %>` in
+a layout if you prefer to place it yourself (the two never double up: the script
+checks `window.__kulla`). A CSP with `script-src` and no nonce blocks the injected script in the browser, so visits stay at
 zero while everything looks configured.
 
 The script posts page, referrer, viewport, device, Web Vitals and JavaScript errors to your app's own

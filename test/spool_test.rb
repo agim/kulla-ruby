@@ -96,7 +96,9 @@ class SpoolTest < Minitest::Test
     assert config.durable_buffer
     assert_equal 900, config.collection_interval
     assert_equal 0, config.logs_per_minute
-    refute config.capture?(:heartbeat)
+    assert config.capture?(:heartbeat)
+    assert config.capture?(:queries)
+    assert config.capture?(:visits)
     config.token = "kla_test"
     config.spool_directory = @directory
     adapter = FakeAdapter.new
@@ -263,5 +265,17 @@ class SpoolTest < Minitest::Test
     assert_equal 85, KullaTestHelpers.decode(adapter.posts.first[:body]).size
     assert client.buffer.empty?
     assert_equal 0, client.buffer.take_dropped
+  end
+
+  def test_runtime_heartbeat_waits_for_the_batch_interval
+    adapter = FakeAdapter.new
+    client = build_client(adapter, durable_buffer: true, spool_directory: @directory, collection_interval: 0.2)
+    client.stub(:next_collection, -> { client.send(:monotonic) + 0.2 }) do
+      client.start
+      sleep 0.02
+      assert_empty adapter.posts
+      wait_until { adapter.events.any? { |row| row["stream"] == "heartbeat" } }
+    end
+    assert_equal Kulla::VERSION, adapter.events.find { |row| row["stream"] == "heartbeat" }.fetch("attrs").fetch("sdk")
   end
 end

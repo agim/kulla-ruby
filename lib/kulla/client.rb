@@ -358,6 +358,7 @@ module Kulla
 
       def run_spooled
         next_delivery = next_collection
+        next_heartbeat = next_delivery
         last_flush = -Float::INFINITY
         next_manifest = monotonic
         next_signals = monotonic
@@ -383,6 +384,10 @@ module Kulla
           if early || monotonic >= next_delivery
             @early = false
             last_flush = monotonic
+            if monotonic >= next_heartbeat
+              heartbeat # A runtime snapshot/check-in once per upload interval.
+              next_heartbeat = next_collection
+            end
             flush
             next_delivery = buffer.empty? ? next_collection : monotonic + [EARLY_FLUSH_GAP, config.collection_period].min
           end
