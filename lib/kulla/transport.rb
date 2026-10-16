@@ -52,13 +52,14 @@ module Kulla
         end
     end
 
-    attr_reader :config, :adapter
+    attr_reader :config, :adapter, :rejections
 
     def initialize(config, adapter: nil, sleeper: nil)
       @config = config
       @adapter = adapter || NetHttpAdapter.new(config.timeout)
       @sleeper = sleeper || ->(seconds) { sleep(seconds) }
       @auth_rejected = false
+      @rejections = []
     end
 
     # True once, after Kulla answered an events POST with 401 or 403 since the last check: the token
@@ -83,6 +84,7 @@ module Kulla
 
     # Sends events, splitting by count and size. Returns the number of events that were not delivered.
     def deliver(events, retries: RETRIES, path: EVENTS_PATH, max_batch: MAX_BATCH, max_bytes: MAX_BYTES)
+      @rejections = []
       lines = events.filter_map do |event|
         self.class.encode_line(event)
       rescue StandardError => e
@@ -167,17 +169,22 @@ module Kulla
         body = self.class.gzip(lines.join)
         if body.bytesize > max_bytes
           if lines.size == 1
-            Kulla.log("dropping one event larger than #{max_bytes} bytes compressed")
+            if config.durable_buffer
+              event = JSON.parse(lines.first)
+              @rejections << { "id" => event.fetch("id"), "error" => "record exceeds the compressed batch size limit" }
+            else
+              Kulla.log("dropping one event larger than #{max_bytes} bytes compressed")
+            end
             return 1
           end
           half = lines.size / 2
           return post_group(lines[0...half], retries, path, max_bytes) + post_group(lines[half..], retries, path, max_bytes)
         end
 
-        post_with_retries(body, lines.size, retries, path)
+        post_with_retries(body, lines.size, retries, path, lines)
       end
 
-      def post_with_retries(body, count, retries, path)
+      def post_with_retries(body, count, retries, path, lines)
         attempt = 0
         loop do
           response = begin
@@ -189,11 +196,12 @@ module Kulla
 
           code = response&.code
           if code && code.between?(200, 299)
+            return durable_ack(response, count, lines) if config.durable_buffer
             log_rejections(response)
             return 0
           elsif code && code != 429 && code.between?(400, 499)
             @auth_rejected = true if [ 401, 403 ].include?(code)
-            Kulla.log("POST #{path} returned #{code}, dropping #{count} events: #{response.body.to_s[0, 200]}",
+            Kulla.log("POST #{path} returned #{code}; #{count} events #{config.durable_buffer ? 'retained for retry' : 'not delivered'}",
                       level: [ 401, 403 ].include?(code) ? :warn : :debug)
             return count
           elsif attempt >= retries
@@ -204,6 +212,24 @@ module Kulla
           @sleeper.call(delay(attempt, response))
           attempt += 1
         end
+      end
+
+      def durable_ack(response, count, lines)
+        result = JSON.parse(response.body.to_s)
+        return count unless result.is_a?(Hash)
+        rejected = result.fetch("rejected")
+        accepted = result.fetch("accepted")
+        valid = rejected.is_a?(Array) && accepted.is_a?(Integer) && accepted >= 0 && accepted + rejected.size == count
+        indices = valid ? rejected.map { |item| item.is_a?(Hash) ? item["index"] : nil } : []
+        valid &&= indices.all? { |i| i.is_a?(Integer) && i >= 0 && i < count } && indices.uniq.size == indices.size
+        return count unless valid
+        rejected.each do |item|
+          event = JSON.parse(lines.fetch(item.fetch("index")))
+          @rejections << { "id" => event.fetch("id"), "error" => Scrubber.clean_string(item["error"].to_s, 200) }
+        end
+        rejected.size
+      rescue JSON::ParserError, KeyError, TypeError
+        count
       end
 
       # Retry-After when the server sends it (capped), otherwise 0.5s, 1s, 2s... with a little jitter.

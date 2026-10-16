@@ -14,6 +14,7 @@ module Kulla
       return if name.nil?
 
       {
+        "id" => SecureRandom.uuid,
         "stream" => name,
         "ts" => format_ts(ts),
         "env" => config.env,
@@ -21,7 +22,7 @@ module Kulla
         "release" => config.release,
         "trace" => trace.nil? ? nil : Scrubber.clean_string(trace, 256),
         "level" => normalize_level(level),
-        "message" => message.nil? ? nil : Scrubber.clean_string(message, MAX_MESSAGE_BYTES),
+        "message" => message.nil? ? nil : Scrubber.clean_content(message, MAX_MESSAGE_BYTES),
         "attrs" => attrs
       }.compact
     end

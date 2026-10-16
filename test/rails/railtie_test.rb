@@ -50,6 +50,8 @@ unless defined?(RAILS_UNAVAILABLE)
   end
 
   Kulla.configure do |c|
+    c.durable_buffer = false # Keep existing integration contracts; durable Rails capture is tested separately.
+    c.capture = { visits: true, beacon: true }
     c.token = "kla_test"
     c.endpoint = "https://kulla.example"
     c.env = "production"
