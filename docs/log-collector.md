@@ -17,7 +17,18 @@ if the application's filesystem is ephemeral. The default is
 `~/.local/state/kulla/<endpoint/environment/application hash>`, outside the release
 checkout. Mount that directory into containers and retain it across deployments.
 Puma/Sidekiq processes using the same configuration share one journal. Files are
-0600 and the directory 0700. Monitor disk space during extended delivery outages.
+0600 and the directory 0700.
+
+The spool is bounded (0.7.1). It keeps at most `buffer_size` pending records (10,000) and
+`spool_max_bytes` of them (64 MB). Past either limit it drops the oldest tenth and writes one `log`
+record saying how many were dropped, so a long outage costs the oldest logs, never the host's disk.
+The journal file is compacted once its delivered or dropped part is larger than 1 MB and than the
+pending part, so it stays under about twice the pending size. `rejected.ndjson` rotates to
+`rejected.1.ndjson` at 1 MB.
+
+Recording a log never waits on the disk: it is written and flushed to the OS on the calling thread, so
+a process that crashes loses nothing, and the SDK's worker thread fsyncs the journal every 2 seconds and
+at shutdown. A power loss can cost the last two seconds.
 
 Every record has a stable UUID. Server acknowledgements advance the journal's
 cursor only after validated acceptance. Ambiguous network failures replay the

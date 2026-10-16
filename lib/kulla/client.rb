@@ -11,13 +11,15 @@ module Kulla
     MAX_SIGNAL_PAGES = 100
     MAX_PENDING_REPORTS = 1_000
     REPORT_ATTEMPTS = 3
+    # How often the worker fsyncs the spool; pushes only flush to the OS, so no request waits on disk.
+    SPOOL_SYNC_INTERVAL = 2
 
     attr_reader :config, :buffer, :transport, :manifest, :signals
 
     def initialize(config, transport: nil)
       @config = config
       @transport = transport || config.transport || Transport.new(config)
-      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
+      @buffer = build_buffer
       @lock = Mutex.new
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
@@ -222,7 +224,10 @@ module Kulla
       stop
       # Durable records survive process shutdown. Do not hold application
       # shutdown open for a network request or break the batch interval.
-      return if config.durable_buffer
+      if config.durable_buffer
+        buffer.sync
+        return
+      end
       return unless config.enabled? && @approved
 
       flush(retries: 0, deadline: monotonic + SHUTDOWN_DEADLINE)
@@ -249,7 +254,7 @@ module Kulla
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
       @buffer.close_inherited_files if @buffer.respond_to?(:close_inherited_files)
-      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
+      @buffer = build_buffer
       @deferred = []
       @reports = []
       @reports_retry_at = 0.0
@@ -325,6 +330,18 @@ module Kulla
         end
       end
 
+      # The durable spool is bounded like the memory buffer: buffer_size records and
+      # spool_max_bytes; past either the oldest are dropped and a loss record is written.
+      def build_buffer
+        return Buffer.new(config.buffer_size) unless config.durable_buffer
+
+        Spool.new(config.spool_directory, max_events: config.buffer_size, max_bytes: config.spool_max_bytes,
+                  on_drop: ->(dropped) {
+                    Event.build("log", { "dropped" => dropped }, config: config, level: :warn,
+                                message: "kulla: #{dropped} events dropped (spool full)")
+                  })
+      end
+
       def run_spooled
         interval = [config.collection_interval.to_f, 0.01].max
         next_delivery = monotonic + buffer.due_in(interval)
@@ -332,6 +349,7 @@ module Kulla
         next_signals = monotonic
         loop do
           break if @stopped
+          buffer.sync
           unless @approved
             wait_for_approval
             next
@@ -352,7 +370,7 @@ module Kulla
           end
           @lock.synchronize do
             break if @stopped
-            timeout = [next_delivery - monotonic, next_manifest - monotonic, next_signals - monotonic].min
+            timeout = [next_delivery - monotonic, next_manifest - monotonic, next_signals - monotonic, SPOOL_SYNC_INTERVAL].min
             @wakeup.wait(@lock, [timeout, 0.01].max) if @deferred.empty? && !reports_due?
           end
         rescue StandardError => e

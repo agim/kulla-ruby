@@ -25,7 +25,7 @@ module Kulla
 
     attr_writer :token, :endpoint, :env, :release, :enabled, :filter_parameters, :host, :logger, :enroll, :app_name
     attr_accessor :flush_interval, :batch_size, :buffer_size, :timeout, :transport, :ignored_events
-    attr_accessor :durable_buffer, :collection_interval
+    attr_accessor :durable_buffer, :collection_interval, :spool_max_bytes
     attr_writer :spool_directory
     # The token Kulla hands out after the owner approves this app (joining without a token). Memory only.
     attr_accessor :issued_token
@@ -45,6 +45,7 @@ module Kulla
       @timeout = 15
       @durable_buffer = true
       @collection_interval = 900
+      @spool_max_bytes = 64 * 1_048_576
       @capture = CAPTURE_DEFAULTS.dup
       @ignored_events = DEFAULT_IGNORED_EVENTS.dup
       @transport = nil

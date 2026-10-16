@@ -70,12 +70,13 @@ Kulla.configure do |c|
   c.app_name = "shop.example.com"             # ENV["KULLA_APP_NAME"]; default: the site, else the Rails app module
   c.release = ENV["GIT_SHA"]                  # KULLA_RELEASE, REVISION, GIT_SHA, KAMAL_VERSION, REVISION file, git
   c.enabled = Rails.env.production?           # default: endpoint and token (or enrollment) present, env != test
-  c.flush_interval = 5                        # seconds
+  c.collection_interval = 900                 # seconds between uploads of the disk spool
   c.batch_size = 500
-  c.buffer_size = 10_000                      # oldest events are dropped (and counted) beyond this
-  c.timeout = 2                               # seconds, per HTTP request
+  c.buffer_size = 10_000                      # pending records kept; the oldest are dropped (and counted) beyond this
+  c.spool_max_bytes = 64 * 1_048_576          # the spool's pending bytes; the same drop-oldest rule past it
+  c.timeout = 15                              # seconds, per HTTP request
   c.filter_parameters += [ :iban ]            # defaults to Rails.application.config.filter_parameters
-  c.capture = { heartbeat: false }            # requests errors jobs mail security events deploy heartbeat visits
+  c.capture = { beacon: true, visits: true }  # merged into the defaults; see "What's captured" for which start off
   c.suppress_bad_emails = true                # opt-in, see "Signals" (default false)
   c.block_signal_ips = true                   # opt-in, see "Signals" (default false)
 end
@@ -216,12 +217,13 @@ and Kulla renames an app still carrying a module-style name after it; a domain n
 
 Nothing to add: `Kulla::BeaconInjector` middleware puts the beacon into every full HTML page (200,
 `text/html`, GET, not a Turbo Frame/Stream or XHR response, not a streamed body), with your CSP nonce
-when the page has one, once per page. Turn it off with `c.capture = { beacon: false }` (Kulla can also
-turn it off per app), and use `<%= kulla_beacon_tag %>` in a layout if you prefer to place it yourself
-(the two never double up: the script checks `window.__kulla`). Two things to know before approving a
-site: the beacon is **on by default** from 0.5.1, so a site that must not measure visitors sets
-`beacon: false` before it is approved; and a CSP with `script-src` and no nonce blocks the injected
-script in the browser, so visits stay at zero while everything looks configured.
+when the page has one, once per page. From 0.7.0 visits and the beacon are **off by default**, like heartbeats and the
+query, cache, HTTP, LLM and activity collectors. Turn them on with `c.capture = { beacon: true, visits: true }`
+(Kulla can also turn them on or off per app), and use `<%= kulla_beacon_tag %>` in a layout if you prefer
+to place it yourself (the two never double up: the script checks `window.__kulla`). 0.5.1 to 0.6.5
+injected the beacon by default; an app upgrading from those that wants to keep counting visits sets both
+options. A CSP with `script-src` and no nonce blocks the injected script in the browser, so visits stay at
+zero while everything looks configured.
 
 The script posts page, referrer, viewport, device, Web Vitals and JavaScript errors to your app's own
 `/kulla/visit`, handled by `Kulla::VisitEndpoint`. The token never reaches the browser. No cookies: the
