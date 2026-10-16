@@ -1,8 +1,13 @@
 # kulla (Ruby SDK)
 
-Sends telemetry from a Rails 8.x app to Kulla and keeps a copy of Kulla's signals. No runtime
+Sends application logs from a Rails 8.x app to Kulla and keeps a copy of Kulla's signals. No runtime
 dependencies beyond the Ruby stdlib; the Rails integration is a Railtie that loads only when Rails is
-present. It never raises into your app: if Kulla is down you lose data, not uptime.
+present. Capture failures never raise into your app; delivery failures retain logs on disk for retry.
+
+Version 0.7 defaults to durable disk buffering and fifteen-minute log batches.
+Deploy the PostgreSQL collector first, retain current tokens, then update the
+gem lockfile. See [durable log collection](docs/log-collector.md) for persistent
+volume requirements, retries and explicit flushing.
 
 ## Install
 

@@ -16,6 +16,8 @@ module Kulla
     # Content that must not leave the app even under a harmless key: emails, token-like strings,
     # long digit runs (phones, cards), data: URLs, and URL query strings.
     CONTENT = [
+      [ /\b(Bearer|Basic)\s+[A-Za-z0-9+\/_.=~:-]+/i, "\\1 [FILTERED]" ],
+      [ /(["']?(?:password|passwd|secret|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization|cookie)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/i, "\\1[FILTERED]" ],
       [ %r{data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+}, "[data]" ],
       [ /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, "[email]" ],
       [ %r{(https?://[^\s?#"']+|\A/[^\s?#"']*|\s/[^\s?#"']*)\?[^\s#"']+}, "\\1?[query]" ],

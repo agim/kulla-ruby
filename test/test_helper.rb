@@ -86,6 +86,9 @@ module KullaTestHelpers
 
   def build_config(**overrides)
     config = Kulla::Configuration.new
+    config.durable_buffer = false # Legacy protocol fixtures; spool behavior has its own suite.
+    config.instance_variable_get(:@capture).merge!(heartbeat: true, visits: true, beacon: true, queries: true, http: true, cache: true, llm: true, activity: true)
+    config.instance_variable_get(:@remote)[:logs_per_minute] = 60
     config.token = "kla_test"
     config.endpoint = "https://kulla.example"
     config.env = "production"

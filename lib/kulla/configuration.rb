@@ -5,11 +5,11 @@ module Kulla
     BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".freeze
     CAPTURE_DEFAULTS = {
       requests: true, errors: true, jobs: true, mail: true, security: true,
-      events: true, deploy: true, heartbeat: true, visits: true, beacon: true,
-      queries: true, http: true, cache: true, llm: true, logs: true, activity: true, browser_errors: true, csp: true
+      events: true, deploy: true, heartbeat: false, visits: false, beacon: false,
+      queries: false, http: false, cache: false, llm: false, logs: true, activity: false, browser_errors: true, csp: true
     }.freeze
     # Tunables Kulla can change remotely (manifest "config"); an app's own setting wins.
-    REMOTE_DEFAULTS = { slow_query_ms: 500, n_plus_one: 10, logs_per_minute: 60, notifications: [] }.freeze
+    REMOTE_DEFAULTS = { slow_query_ms: 500, n_plus_one: 10, logs_per_minute: 0, notifications: [] }.freeze
     # Rails 8.1 re-emits its own instrumentation as structured events once anything subscribes
     # to Rails.event. Kulla already captures those as request/job/mail, so skip them.
     DEFAULT_IGNORED_EVENTS = %w[
@@ -25,6 +25,8 @@ module Kulla
 
     attr_writer :token, :endpoint, :env, :release, :enabled, :filter_parameters, :host, :logger, :enroll, :app_name
     attr_accessor :flush_interval, :batch_size, :buffer_size, :timeout, :transport, :ignored_events
+    attr_accessor :durable_buffer, :collection_interval
+    attr_writer :spool_directory
     # The token Kulla hands out after the owner approves this app (joining without a token). Memory only.
     attr_accessor :issued_token
     # Opt-in signal integrations (Rails), both default off:
@@ -37,10 +39,12 @@ module Kulla
     attr_accessor :process_role
 
     def initialize
-      @flush_interval = 5
+      @flush_interval = 900
       @batch_size = 500
       @buffer_size = 10_000
-      @timeout = 2
+      @timeout = 15
+      @durable_buffer = true
+      @collection_interval = 900
       @capture = CAPTURE_DEFAULTS.dup
       @ignored_events = DEFAULT_IGNORED_EVENTS.dup
       @transport = nil
@@ -187,6 +191,15 @@ module Kulla
       else
         Dir.pwd
       end
+    end
+
+    # Keep outside a release directory so deploys and worker forks share the
+    # same journal. Containers must mount this path on persistent storage.
+    def spool_directory
+      return @spool_directory if defined?(@spool_directory)
+      return ENV["KULLA_SPOOL_DIR"] unless ENV["KULLA_SPOOL_DIR"].to_s.empty?
+      identity = Digest::SHA256.hexdigest([endpoint, env, app_name].join("\0"))[0, 24]
+      File.join(Dir.home, ".local", "state", "kulla", identity)
     end
 
     def scrubber

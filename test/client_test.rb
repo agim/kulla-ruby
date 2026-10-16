@@ -14,7 +14,8 @@ class ClientTest < Minitest::Test
     assert_equal "warn", event["level"]
     assert_equal "hi", event["message"]
     assert_equal({ "plan" => "pro", "email" => "[FILTERED]" }, event["attrs"])
-    assert_equal %w[attrs env host level message release stream ts], event.keys.sort
+    assert_equal %w[attrs env host id level message release stream ts], event.keys.sort
+    assert_match(/\A[0-9a-f-]{36}\z/, event["id"])
   end
 
   def test_disabled_client_buffers_nothing

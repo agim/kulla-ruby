@@ -2,7 +2,7 @@ require "logger"
 
 module Kulla
   module Subscribers
-    # Warn/error/fatal log lines -> `log` events (at most logs_per_minute per process) and breadcrumbs.
+    # App log lines -> durable `log` records; legacy mode retains its warn-level cap.
     # Broadcast from Rails.logger, so the app's own logging is untouched.
     class Logs < ::Logger
       KEY = :kulla_logging
@@ -10,13 +10,17 @@ module Kulla
       def self.install(client)
         return unless defined?(Rails) && Rails.logger.respond_to?(:broadcast_to)
         return if Rails.logger.respond_to?(:broadcasts) && Rails.logger.broadcasts.any? { |l| l.is_a?(self) }
-        Rails.logger.broadcast_to(new(client))
+        collector = new(client)
+        # Adding a lower-level sink to BroadcastLogger can increase the host
+        # application's verbosity. Capture its configured level without changing it.
+        collector.level = Rails.logger.level if client.config.durable_buffer
+        Rails.logger.broadcast_to(collector)
       end
 
       def initialize(client)
         super(nil)
         @client = client
-        self.level = ::Logger::WARN
+        self.level = client.config.durable_buffer ? ::Logger::INFO : ::Logger::WARN
         @window = nil
         @sent = 0
       end
@@ -42,7 +46,8 @@ module Kulla
       def send_event(level_name, message)
         minute = Time.now.to_i / 60
         (@window, @sent) = [ minute, 0 ] if @window != minute
-        return if @sent >= @client.config.logs_per_minute
+        limit = @client.config.logs_per_minute
+        return if limit.positive? && @sent >= limit
         @sent += 1
         @client.track("log", {}, level: level_name, message: Scrubber.clean_content(message, 2_000), trace: Context.current&.trace, scrub: true)
       end

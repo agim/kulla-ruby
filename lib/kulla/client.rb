@@ -17,7 +17,7 @@ module Kulla
     def initialize(config, transport: nil)
       @config = config
       @transport = transport || config.transport || Transport.new(config)
-      @buffer = Buffer.new(config.buffer_size)
+      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
       @lock = Mutex.new
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
@@ -180,7 +180,7 @@ module Kulla
     def push(event)
       ensure_worker
       size = buffer.push(event)
-      wake if size >= config.batch_size
+      wake if !config.durable_buffer && size >= config.batch_size
       event
     end
 
@@ -198,6 +198,7 @@ module Kulla
 
     # Sends everything buffered right now, on the calling thread.
     def flush(retries: Transport::RETRIES, deadline: nil)
+      return flush_spooled(retries: retries, deadline: deadline) if config.durable_buffer
       @flush_lock.synchronize do
         loop do
           batch, dropped, unsent = next_batch
@@ -219,6 +220,9 @@ module Kulla
     # Stops the worker and makes one short attempt to send what is left.
     def shutdown
       stop
+      # Durable records survive process shutdown. Do not hold application
+      # shutdown open for a network request or break the batch interval.
+      return if config.durable_buffer
       return unless config.enabled? && @approved
 
       flush(retries: 0, deadline: monotonic + SHUTDOWN_DEADLINE)
@@ -244,7 +248,8 @@ module Kulla
       @lock = Mutex.new
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
-      @buffer = Buffer.new(config.buffer_size)
+      @buffer.close_inherited_files if @buffer.respond_to?(:close_inherited_files)
+      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
       @deferred = []
       @reports = []
       @reports_retry_at = 0.0
@@ -277,6 +282,7 @@ module Kulla
       end
 
       def run
+        return run_spooled if config.durable_buffer
         next_heartbeat = monotonic + HEARTBEAT_INTERVAL
         next_manifest = monotonic
         next_signals = monotonic
@@ -316,6 +322,68 @@ module Kulla
         rescue StandardError => e
           Kulla.log("worker iteration failed: #{e.class}: #{e.message}")
           sleep 1
+        end
+      end
+
+      def run_spooled
+        interval = [config.collection_interval.to_f, 0.01].max
+        next_delivery = monotonic + buffer.due_in(interval)
+        next_manifest = monotonic
+        next_signals = monotonic
+        loop do
+          break if @stopped
+          unless @approved
+            wait_for_approval
+            next
+          end
+          if monotonic >= next_manifest
+            refresh_manifest
+            next_manifest = monotonic + MANIFEST_INTERVAL
+          end
+          if monotonic >= next_signals
+            sync_signals
+            next_signals = monotonic + SIGNALS_INTERVAL
+          end
+          run_deferred
+          send_signal_reports if @lock.synchronize { reports_due? }
+          if monotonic >= next_delivery
+            flush
+            next_delivery = monotonic + (buffer.empty? ? interval : [60, interval].min)
+          end
+          @lock.synchronize do
+            break if @stopped
+            timeout = [next_delivery - monotonic, next_manifest - monotonic, next_signals - monotonic].min
+            @wakeup.wait(@lock, [timeout, 0.01].max) if @deferred.empty? && !reports_due?
+          end
+        rescue StandardError => e
+          Kulla.log("log collector failed: #{e.class}; records retained on disk", level: :warn)
+          sleep 1
+        end
+      end
+
+      def flush_spooled(retries:, deadline:)
+        @flush_lock.synchronize do
+          buffer.with_delivery_lock do
+            loop do
+              limit = [[config.batch_size.to_i, events_endpoint[:max_batch]].min, 1].max
+              batch = buffer.peek(limit)
+              break if batch.events.empty?
+              lost = transport.deliver(batch.events, retries: retries, **events_endpoint)
+              rejected = transport.respond_to?(:rejections) ? transport.rejections : []
+              token_rejected if transport.auth_rejected?
+              if lost > rejected.size
+                Kulla.log("log delivery incomplete; batch retained for retry", level: :warn)
+                break
+              end
+              if rejected.any?
+                ids = rejected.map { |item| item.fetch("id") }
+                buffer.quarantine(batch.events.select { |event| ids.include?(event["id"]) }, rejected)
+                Kulla.log("#{rejected.size} rejected logs retained in local rejected.ndjson", level: :warn)
+              end
+              buffer.acknowledge(batch)
+              break if deadline && monotonic >= deadline
+            end
+          end
         end
       end
 

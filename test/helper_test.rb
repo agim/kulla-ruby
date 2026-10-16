@@ -17,6 +17,7 @@ class HelperTest < Minitest::Test
       c.endpoint = "https://kulla.example"
       c.env = "production"
       c.logger = nil
+      c.capture = { visits: true } # Explicit browser opt-in; log collection defaults it off.
     end
   end
 
