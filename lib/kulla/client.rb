@@ -11,13 +11,17 @@ module Kulla
     MAX_SIGNAL_PAGES = 100
     MAX_PENDING_REPORTS = 1_000
     REPORT_ATTEMPTS = 3
+    # How often the worker fsyncs the spool; pushes only flush to the OS, so no request waits on disk.
+    SPOOL_SYNC_INTERVAL = 2
+    # Minimum seconds between collector sends outside the app's slot (high water, or a retry).
+    EARLY_FLUSH_GAP = 60
 
     attr_reader :config, :buffer, :transport, :manifest, :signals
 
     def initialize(config, transport: nil)
       @config = config
       @transport = transport || config.transport || Transport.new(config)
-      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
+      @buffer = build_buffer
       @lock = Mutex.new
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
@@ -35,6 +39,7 @@ module Kulla
       @reports_retry_at = 0.0
       @approved = !config.enrolling?
       @activity = Hash.new(0)
+      @early = false
     end
 
     # One insert into a table (Subscribers::Sql); sent as per-table counts with the heartbeat.
@@ -180,7 +185,11 @@ module Kulla
     def push(event)
       ensure_worker
       size = buffer.push(event)
-      wake if !config.durable_buffer && size >= config.batch_size
+      if config.durable_buffer
+        wake_early if buffer.high_water?
+      elsif size >= config.batch_size
+        wake
+      end
       event
     end
 
@@ -222,7 +231,10 @@ module Kulla
       stop
       # Durable records survive process shutdown. Do not hold application
       # shutdown open for a network request or break the batch interval.
-      return if config.durable_buffer
+      if config.durable_buffer
+        buffer.sync
+        return
+      end
       return unless config.enabled? && @approved
 
       flush(retries: 0, deadline: monotonic + SHUTDOWN_DEADLINE)
@@ -249,7 +261,7 @@ module Kulla
       @flush_lock = Mutex.new
       @wakeup = ConditionVariable.new
       @buffer.close_inherited_files if @buffer.respond_to?(:close_inherited_files)
-      @buffer = config.durable_buffer ? Spool.new(config.spool_directory) : Buffer.new(config.buffer_size)
+      @buffer = build_buffer
       @deferred = []
       @reports = []
       @reports_retry_at = 0.0
@@ -279,6 +291,13 @@ module Kulla
 
       def wake
         @lock.synchronize { @wakeup.signal }
+      end
+
+      # One signal per fill: request threads above high water skip the lock until the collector sends.
+      def wake_early
+        return if @early
+        @early = true
+        wake
       end
 
       def run
@@ -325,13 +344,26 @@ module Kulla
         end
       end
 
+      # The durable spool is bounded like the memory buffer: buffer_size records and
+      # spool_max_bytes; past either the oldest are dropped and a loss record is written.
+      def build_buffer
+        return Buffer.new(config.buffer_size) unless config.durable_buffer
+
+        Spool.new(config.spool_directory, max_events: config.buffer_size, max_bytes: config.spool_max_bytes,
+                  on_drop: ->(dropped) {
+                    Event.build("log", { "dropped" => dropped }, config: config, level: :warn,
+                                message: "kulla: #{dropped} events dropped (spool full)")
+                  })
+      end
+
       def run_spooled
-        interval = [config.collection_interval.to_f, 0.01].max
-        next_delivery = monotonic + buffer.due_in(interval)
+        next_delivery = next_collection
+        last_flush = -Float::INFINITY
         next_manifest = monotonic
         next_signals = monotonic
         loop do
           break if @stopped
+          buffer.sync
           unless @approved
             wait_for_approval
             next
@@ -346,13 +378,17 @@ module Kulla
           end
           run_deferred
           send_signal_reports if @lock.synchronize { reports_due? }
-          if monotonic >= next_delivery
+          # Early only when the spool nears its cap, at most once a minute so an outage isn't hammered.
+          early = buffer.high_water? && monotonic >= last_flush + EARLY_FLUSH_GAP
+          if early || monotonic >= next_delivery
+            @early = false
+            last_flush = monotonic
             flush
-            next_delivery = monotonic + (buffer.empty? ? interval : [60, interval].min)
+            next_delivery = buffer.empty? ? next_collection : monotonic + [EARLY_FLUSH_GAP, config.collection_period].min
           end
           @lock.synchronize do
             break if @stopped
-            timeout = [next_delivery - monotonic, next_manifest - monotonic, next_signals - monotonic].min
+            timeout = [next_delivery - monotonic, next_manifest - monotonic, next_signals - monotonic, SPOOL_SYNC_INTERVAL].min
             @wakeup.wait(@lock, [timeout, 0.01].max) if @deferred.empty? && !reports_due?
           end
         rescue StandardError => e
@@ -559,6 +595,16 @@ module Kulla
 
       def monotonic
         Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
+
+      # The next wall-clock collection slot for this app, on the monotonic clock: slots are
+      # collection_interval apart, aligned to the epoch (so to the hour for fifteen minutes),
+      # shifted by collection_offset.
+      def next_collection(now = Time.now.to_f)
+        period = config.collection_period
+        offset = config.collection_offset
+        at = (((now - offset) / period).floor + 1) * period + offset
+        monotonic + (at - now)
       end
   end
 end

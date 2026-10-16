@@ -33,7 +33,7 @@ class SpoolTest < Minitest::Test
     Dir.children(@directory).each { |name| assert_equal 0o600, File.stat(File.join(@directory, name)).mode & 0o777 }
   end
 
-  def test_processes_share_one_durable_journal_without_buffer_limit_drops
+  def test_processes_share_one_durable_journal_below_the_limit_without_drops
     children = 3.times.map do |worker|
       fork do
         spool = Kulla::Spool.new(@directory)
@@ -122,6 +122,96 @@ class SpoolTest < Minitest::Test
     refute_includes File.read(File.join(@directory, "logs.ndjson")), "short-secret"
   end
 
+  def loss(n) = { "stream" => "log", "level" => "warn", "message" => "kulla: #{n} events dropped (spool full)", "attrs" => { "dropped" => n } }
+
+  def test_spool_never_holds_more_than_max_events_and_records_what_it_dropped
+    spool = Kulla::Spool.new(@directory, max_events: 1_000, on_drop: ->(n) { loss(n) })
+    ids = 1_100.times.map { |i| event(i).tap { |e| spool.push(e) }["id"] }
+    assert_operator spool.size, :<=, 1_000
+    events = []
+    until (batch = spool.peek(500)).events.empty?
+      events.concat(batch.events)
+      spool.acknowledge(batch)
+    end
+    losses = events.select { |e| e["message"].to_s.include?("dropped (spool full)") }
+    dropped = losses.sum { |e| e.dig("attrs", "dropped") }
+    assert_operator losses.size, :>=, 1
+    assert_equal 1_100, dropped + events.size - losses.size, "every record is either delivered or counted as dropped"
+    assert_equal ids.last(events.size - losses.size), (events - losses).map { |e| e["id"] }, "the oldest records go first"
+    assert_equal dropped, spool.take_dropped
+  end
+
+  def test_spool_bytes_stay_bounded_when_kulla_is_unreachable
+    spool = Kulla::Spool.new(@directory, max_events: 100_000, max_bytes: 262_144, on_drop: ->(n) { loss(n) })
+    big = "x" * 2_000
+    2_000.times { |i| spool.push(event(i).merge("message" => big)) } # about 4 MB offered
+    assert_operator File.size(File.join(@directory, "logs.ndjson")), :<=, 2 * 262_144 + Kulla::Spool::MIN_COMPACT_BYTES
+    assert_operator spool.size, :<, 2_000
+  end
+
+  def test_journal_is_compacted_while_delivery_keeps_up_with_new_records
+    spool = Kulla::Spool.new(@directory)
+    message = "y" * 1_000
+    spool.push(event(0).merge("message" => message))
+    300.times do |i|
+      batch = spool.peek(500)
+      spool.push(event(i + 1).merge("message" => message)) # a record arrives during every delivery
+      spool.acknowledge(batch)
+    end
+    assert_equal 1, spool.size
+    assert_operator File.size(File.join(@directory, "logs.ndjson")), :<, 2 * Kulla::Spool::MIN_COMPACT_BYTES
+  end
+
+  def test_push_never_fsyncs_and_sync_does_it_from_the_worker
+    spool = Kulla::Spool.new(@directory)
+    spool.push(event(0)) # creates the journal header (one fsync, once)
+    calls = []
+    counter = Module.new { define_method(:fsync) { calls << path rescue calls << :dir; super() } }
+    File.prepend(counter)
+    begin
+      50.times { |i| spool.push(event(i + 1)) }
+      assert_empty calls.grep(/logs\.ndjson/), "a request thread must not wait on the disk"
+      assert spool.sync
+      assert_equal 1, calls.grep(/logs\.ndjson/).size
+      refute spool.sync, "nothing new to sync"
+    ensure
+      counter.send(:remove_method, :fsync)
+    end
+  end
+
+  def test_records_dropped_during_delivery_do_not_undo_its_acknowledgement
+    spool = Kulla::Spool.new(@directory, max_events: 100, on_drop: ->(n) { loss(n) })
+    50.times { |i| spool.push(event(i)) }
+    batch = spool.peek(20)
+    120.times { |i| spool.push(event(100 + i)) } # the spool fills and drops past the batch
+    spool.acknowledge(batch)
+    remaining = []
+    until (b = spool.peek(500)).events.empty?
+      remaining.concat(b.events)
+      spool.acknowledge(b)
+    end
+    refute_includes remaining.map { |e| e["id"] }, batch.events.first["id"]
+    assert_operator remaining.size, :<=, 100
+  end
+
+  def test_rejected_records_rotate_instead_of_growing
+    spool = Kulla::Spool.new(@directory)
+    records = 3.times.map { |i| event(i).merge("message" => "z" * 400_000) }
+    records.each { |record| spool.quarantine([ record ], [ { "error" => "too big" } ]) }
+    assert_operator File.size(File.join(@directory, "rejected.ndjson")), :<=, Kulla::Spool::MAX_REJECTED_BYTES
+    assert File.exist?(File.join(@directory, "rejected.1.ndjson"))
+  end
+
+  def test_client_bounds_the_spool_by_buffer_size_and_spool_max_bytes
+    config = build_config(durable_buffer: true, spool_directory: @directory, buffer_size: 200, spool_max_bytes: 1_048_576)
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: FakeAdapter.new))
+    250.times { |i| client.buffer.push(event(i)) }
+    assert_operator client.buffer.size, :<=, 200
+    assert_equal 200, client.buffer.max_events
+    assert_equal 1_048_576, client.buffer.max_bytes
+    assert client.buffer.peek(500).events.any? { |e| e["message"].to_s.include?("dropped (spool full)") }
+  end
+
   def test_rails_sink_respects_the_app_logger_level
     config = build_config(durable_buffer: true, spool_directory: @directory)
     client = Kulla::Client.new(config)
@@ -135,5 +225,43 @@ class SpoolTest < Minitest::Test
       assert_equal level, source.broadcasts.fetch(0).level
       assert_equal level, source.level
     end
+  end
+
+  def test_each_app_gets_a_stable_whole_minute_collection_offset
+    offsets = 60.times.map { |i| build_config(app_name: "app-#{i}").collection_offset }
+    assert offsets.all? { |o| (o % 60).zero? && o.between?(0, 14 * 60) }, "a whole minute inside the fifteen-minute slot"
+    assert_equal 15, offsets.uniq.size, "sixty apps cover every minute of the slot"
+    assert_equal build_config(app_name: "app-7").collection_offset, build_config(app_name: "app-7").collection_offset
+    assert_equal 60.0, build_config(collection_offset: 60).collection_offset
+    assert_equal 0.0, build_config(collection_interval: 0.05).collection_offset
+  end
+
+  def test_collection_lands_on_the_app_slot_aligned_to_the_hour
+    client = Kulla::Client.new(build_config(durable_buffer: true, spool_directory: @directory, collection_offset: 60))
+    @clients = [client]
+    at = ->(now) { client.send(:next_collection, now.to_f) - client.send(:monotonic) } # seconds from `now` to the slot
+    # Offset one minute: slots at :01, :16, :31 and :46.
+    assert_in_delta 630, at.call(Time.utc(2026, 10, 16, 7, 20, 30)), 0.5, "07:20:30 waits for 07:31"
+    assert_in_delta 900, at.call(Time.utc(2026, 10, 16, 7, 1, 0)), 0.5, "on the slot itself, the next one is a full interval away"
+    assert_in_delta 60, at.call(Time.utc(2026, 10, 16, 7, 0, 0)), 0.5, "07:00 waits for 07:01"
+  end
+
+  def test_a_spool_near_its_cap_is_sent_before_the_slot_instead_of_dropping
+    accepted = Kulla::Transport::Response.new(202, {}, '{"accepted":85,"rejected":[]}')
+    adapter = FakeAdapter.new(accepted)
+    config = build_config(durable_buffer: true, spool_directory: @directory, buffer_size: 100, collection_interval: 900)
+    config.collection_offset = ((Time.now.to_f % 900) + 450) % 900 # the slot is minutes away
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    @clients = [client]
+    70.times { |i| client.push(event(i)) }
+    sleep 0.1
+    assert_empty adapter.posts, "below high water, records wait for the slot"
+    15.times { |i| client.push(event(70 + i)) } # 85 of 100: past 80%
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+    sleep 0.02 until adapter.posts.any? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+    assert_equal 1, adapter.posts.size
+    assert_equal 85, KullaTestHelpers.decode(adapter.posts.first[:body]).size
+    assert client.buffer.empty?
+    assert_equal 0, client.buffer.take_dropped
   end
 end

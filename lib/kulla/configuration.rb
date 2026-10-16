@@ -25,8 +25,8 @@ module Kulla
 
     attr_writer :token, :endpoint, :env, :release, :enabled, :filter_parameters, :host, :logger, :enroll, :app_name
     attr_accessor :flush_interval, :batch_size, :buffer_size, :timeout, :transport, :ignored_events
-    attr_accessor :durable_buffer, :collection_interval
-    attr_writer :spool_directory
+    attr_accessor :durable_buffer, :collection_interval, :spool_max_bytes
+    attr_writer :spool_directory, :collection_offset
     # The token Kulla hands out after the owner approves this app (joining without a token). Memory only.
     attr_accessor :issued_token
     # Opt-in signal integrations (Rails), both default off:
@@ -45,6 +45,7 @@ module Kulla
       @timeout = 15
       @durable_buffer = true
       @collection_interval = 900
+      @spool_max_bytes = 64 * 1_048_576
       @capture = CAPTURE_DEFAULTS.dup
       @ignored_events = DEFAULT_IGNORED_EVENTS.dup
       @transport = nil
@@ -198,8 +199,26 @@ module Kulla
     def spool_directory
       return @spool_directory if defined?(@spool_directory)
       return ENV["KULLA_SPOOL_DIR"] unless ENV["KULLA_SPOOL_DIR"].to_s.empty?
-      identity = Digest::SHA256.hexdigest([endpoint, env, app_name].join("\0"))[0, 24]
       File.join(Dir.home, ".local", "state", "kulla", identity)
+    end
+
+    # This app as one Kulla sees it: names its spool and picks its collection slot.
+    def identity
+      Digest::SHA256.hexdigest([endpoint, env, app_name].join("\0"))[0, 24]
+    end
+
+    def collection_period
+      [collection_interval.to_f, 0.01].max
+    end
+
+    # Seconds past each collection slot when this app delivers. Without it every app
+    # sharing a Kulla sends at :00, :15, :30 and :45; a whole-minute offset from the
+    # app's identity spreads fifteen-minute collection over minutes 0 to 14.
+    def collection_offset
+      return @collection_offset.to_f % collection_period if @collection_offset
+      minutes = (collection_period / 60).floor
+      return 0.0 if minutes < 2
+      (identity.to_i(16) % minutes) * 60.0
     end
 
     def scrubber
