@@ -1,3 +1,8 @@
+# SDK 0.7.2 correction
+
+Retain all existing capture features. Only transmission is batched every fifteen
+minutes. Runtime snapshots/check-ins travel once per upload interval.
+
 # Durable log collection (0.7)
 
 Deploy Kulla's PostgreSQL collector before upgrading this SDK. Current endpoint,
@@ -14,9 +19,8 @@ and :46, and so on across minutes 0 to 14. A spool past 80% of `buffer_size` or
 `spool_max_bytes` uploads before its slot (at most once a minute), so a busy app
 sends early instead of dropping its oldest records.
 INFO and higher application logs are captured without the old per-minute cap.
-Heartbeat, browser visits and the query/cache/HTTP/LLM APM collectors default off.
-Explicit local capture settings are retained. The collector's manifest disables
-its retired APM captures; it does not replace credentials.
+Existing runtime, browser visits and query/cache/HTTP/LLM capture flags remain enabled. Runtime snapshots are collected at each upload interval.
+Explicit local capture settings and current credentials are retained; collection features are not retired.
 
 Set `KULLA_SPOOL_DIR` to a persistent local directory writable by the service user
 if the application's filesystem is ephemeral. The default is
