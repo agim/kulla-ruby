@@ -7,6 +7,12 @@ also point at the new release/commit before Bundler can update it.
 
 By default, captured request, job, error, mail, security, deploy and application
 log records are written to a shared disk journal and uploaded every 15 minutes.
+Uploads land on fixed slots aligned to the hour, shifted by a whole-minute offset
+from the app's identity (endpoint, env and app name), so apps sharing a Kulla don't
+all send at once: one app sends at :00, :15, :30 and :45, another at :01, :16, :31
+and :46, and so on across minutes 0 to 14. A spool past 80% of `buffer_size` or
+`spool_max_bytes` uploads before its slot (at most once a minute), so a busy app
+sends early instead of dropping its oldest records.
 INFO and higher application logs are captured without the old per-minute cap.
 Heartbeat, browser visits and the query/cache/HTTP/LLM APM collectors default off.
 Explicit local capture settings are retained. The collector's manifest disables
@@ -44,7 +50,8 @@ overdue records are eligible immediately. Network failure retries are bounded
 and pending batches remain on disk. `Kulla.flush` explicitly drains now, useful
 for an operator verification after deploying the server and gem.
 
-For unusual setups, configure `collection_interval` (seconds) and
+For unusual setups, configure `collection_interval` (seconds),
+`collection_offset` (seconds past each slot, to pin an app's minute) and
 `spool_directory` through `Kulla.configure`. `durable_buffer=false` retains the
 legacy short-interval memory-buffer transport for compatibility; it does not
 provide restart safety and is not the production default.

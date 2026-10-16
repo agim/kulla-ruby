@@ -130,6 +130,13 @@ module Kulla
       locked { data { |file, header, start| pending(file, header, start)[:count] } }
     end
 
+    # Past 80% of either limit, as of this process's last push or look: the collector
+    # sends then rather than wait for its slot and drop records a busy app outran.
+    def high_water?
+      tally = @tally or return false
+      tally[:count] >= @max_events * 8 / 10 || tally[:size] - tally[:cursor] >= @max_bytes * 8 / 10
+    end
+
     # Records this process dropped since the last call (each drop also wrote a loss record).
     def take_dropped
       @mutex.synchronize { @dropped.tap { @dropped = 0 } }

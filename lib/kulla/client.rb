@@ -13,6 +13,8 @@ module Kulla
     REPORT_ATTEMPTS = 3
     # How often the worker fsyncs the spool; pushes only flush to the OS, so no request waits on disk.
     SPOOL_SYNC_INTERVAL = 2
+    # Minimum seconds between collector sends outside the app's slot (high water, or a retry).
+    EARLY_FLUSH_GAP = 60
 
     attr_reader :config, :buffer, :transport, :manifest, :signals
 
@@ -37,6 +39,7 @@ module Kulla
       @reports_retry_at = 0.0
       @approved = !config.enrolling?
       @activity = Hash.new(0)
+      @early = false
     end
 
     # One insert into a table (Subscribers::Sql); sent as per-table counts with the heartbeat.
@@ -182,7 +185,11 @@ module Kulla
     def push(event)
       ensure_worker
       size = buffer.push(event)
-      wake if !config.durable_buffer && size >= config.batch_size
+      if config.durable_buffer
+        wake_early if buffer.high_water?
+      elsif size >= config.batch_size
+        wake
+      end
       event
     end
 
@@ -286,6 +293,13 @@ module Kulla
         @lock.synchronize { @wakeup.signal }
       end
 
+      # One signal per fill: request threads above high water skip the lock until the collector sends.
+      def wake_early
+        return if @early
+        @early = true
+        wake
+      end
+
       def run
         return run_spooled if config.durable_buffer
         next_heartbeat = monotonic + HEARTBEAT_INTERVAL
@@ -343,8 +357,8 @@ module Kulla
       end
 
       def run_spooled
-        interval = [config.collection_interval.to_f, 0.01].max
-        next_delivery = monotonic + buffer.due_in(interval)
+        next_delivery = next_collection
+        last_flush = -Float::INFINITY
         next_manifest = monotonic
         next_signals = monotonic
         loop do
@@ -364,9 +378,13 @@ module Kulla
           end
           run_deferred
           send_signal_reports if @lock.synchronize { reports_due? }
-          if monotonic >= next_delivery
+          # Early only when the spool nears its cap, at most once a minute so an outage isn't hammered.
+          early = buffer.high_water? && monotonic >= last_flush + EARLY_FLUSH_GAP
+          if early || monotonic >= next_delivery
+            @early = false
+            last_flush = monotonic
             flush
-            next_delivery = monotonic + (buffer.empty? ? interval : [60, interval].min)
+            next_delivery = buffer.empty? ? next_collection : monotonic + [EARLY_FLUSH_GAP, config.collection_period].min
           end
           @lock.synchronize do
             break if @stopped
@@ -577,6 +595,16 @@ module Kulla
 
       def monotonic
         Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
+
+      # The next wall-clock collection slot for this app, on the monotonic clock: slots are
+      # collection_interval apart, aligned to the epoch (so to the hour for fifteen minutes),
+      # shifted by collection_offset.
+      def next_collection(now = Time.now.to_f)
+        period = config.collection_period
+        offset = config.collection_offset
+        at = (((now - offset) / period).floor + 1) * period + offset
+        monotonic + (at - now)
       end
   end
 end

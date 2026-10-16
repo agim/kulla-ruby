@@ -226,4 +226,42 @@ class SpoolTest < Minitest::Test
       assert_equal level, source.level
     end
   end
+
+  def test_each_app_gets_a_stable_whole_minute_collection_offset
+    offsets = 60.times.map { |i| build_config(app_name: "app-#{i}").collection_offset }
+    assert offsets.all? { |o| (o % 60).zero? && o.between?(0, 14 * 60) }, "a whole minute inside the fifteen-minute slot"
+    assert_equal 15, offsets.uniq.size, "sixty apps cover every minute of the slot"
+    assert_equal build_config(app_name: "app-7").collection_offset, build_config(app_name: "app-7").collection_offset
+    assert_equal 60.0, build_config(collection_offset: 60).collection_offset
+    assert_equal 0.0, build_config(collection_interval: 0.05).collection_offset
+  end
+
+  def test_collection_lands_on_the_app_slot_aligned_to_the_hour
+    client = Kulla::Client.new(build_config(durable_buffer: true, spool_directory: @directory, collection_offset: 60))
+    @clients = [client]
+    at = ->(now) { client.send(:next_collection, now.to_f) - client.send(:monotonic) } # seconds from `now` to the slot
+    # Offset one minute: slots at :01, :16, :31 and :46.
+    assert_in_delta 630, at.call(Time.utc(2026, 10, 16, 7, 20, 30)), 0.5, "07:20:30 waits for 07:31"
+    assert_in_delta 900, at.call(Time.utc(2026, 10, 16, 7, 1, 0)), 0.5, "on the slot itself, the next one is a full interval away"
+    assert_in_delta 60, at.call(Time.utc(2026, 10, 16, 7, 0, 0)), 0.5, "07:00 waits for 07:01"
+  end
+
+  def test_a_spool_near_its_cap_is_sent_before_the_slot_instead_of_dropping
+    accepted = Kulla::Transport::Response.new(202, {}, '{"accepted":85,"rejected":[]}')
+    adapter = FakeAdapter.new(accepted)
+    config = build_config(durable_buffer: true, spool_directory: @directory, buffer_size: 100, collection_interval: 900)
+    config.collection_offset = ((Time.now.to_f % 900) + 450) % 900 # the slot is minutes away
+    client = Kulla::Client.new(config, transport: Kulla::Transport.new(config, adapter: adapter))
+    @clients = [client]
+    70.times { |i| client.push(event(i)) }
+    sleep 0.1
+    assert_empty adapter.posts, "below high water, records wait for the slot"
+    15.times { |i| client.push(event(70 + i)) } # 85 of 100: past 80%
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+    sleep 0.02 until adapter.posts.any? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+    assert_equal 1, adapter.posts.size
+    assert_equal 85, KullaTestHelpers.decode(adapter.posts.first[:body]).size
+    assert client.buffer.empty?
+    assert_equal 0, client.buffer.take_dropped
+  end
 end

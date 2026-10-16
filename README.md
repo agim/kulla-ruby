@@ -71,6 +71,7 @@ Kulla.configure do |c|
   c.release = ENV["GIT_SHA"]                  # KULLA_RELEASE, REVISION, GIT_SHA, KAMAL_VERSION, REVISION file, git
   c.enabled = Rails.env.production?           # default: endpoint and token (or enrollment) present, env != test
   c.collection_interval = 900                 # seconds between uploads of the disk spool
+  c.collection_offset = 60                    # seconds past each slot (:01, :16, …); default: a minute from the app's identity
   c.batch_size = 500
   c.buffer_size = 10_000                      # pending records kept; the oldest are dropped (and counted) beyond this
   c.spool_max_bytes = 64 * 1_048_576          # the spool's pending bytes; the same drop-oldest rule past it
