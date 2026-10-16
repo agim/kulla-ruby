@@ -164,6 +164,47 @@ class SpoolTest < Minitest::Test
     assert_operator File.size(File.join(@directory, "logs.ndjson")), :<, 2 * Kulla::Spool::MIN_COMPACT_BYTES
   end
 
+  def test_a_record_does_not_rewrite_file_modes_but_a_wrong_mode_is_still_fixed
+    spool = Kulla::Spool.new(@directory)
+    spool.push(event(0)) # creates the journal and the append lock
+    calls = []
+    instance = Module.new { define_method(:chmod) { |*args| calls << path; super(*args) } }
+    klass = Module.new { define_method(:chmod) { |*args| calls << args.last; super(*args) } }
+    File.prepend(instance)
+    File.singleton_class.prepend(klass)
+    begin
+      50.times { |i| spool.push(event(i + 1)) }
+      assert_empty calls, "a record must not touch the files' inodes"
+    ensure
+      instance.send(:remove_method, :chmod)
+      klass.send(:remove_method, :chmod)
+    end
+    journal = File.join(@directory, "logs.ndjson")
+    File.chmod(0o644, journal)
+    spool.push(event(99))
+    assert_equal 0o600, File.stat(journal).mode & 0o777
+  end
+
+  def test_children_forked_from_one_spool_keep_appends_exclusive
+    spool = Kulla::Spool.new(@directory)
+    spool.push(event("parent")) # the parent opens its append lock before forking
+    children = 3.times.map do |worker|
+      fork do
+        400.times { |i| spool.push(event("#{worker}:#{i}")) }
+        exit! 0
+      end
+    end
+    children.each { |pid| Process.wait(pid); assert_predicate $?, :success? }
+    reader = Kulla::Spool.new(@directory)
+    ids = []
+    until (batch = reader.peek(500)).events.empty?
+      ids.concat(batch.events.map { |e| e.fetch("id") })
+      reader.acknowledge(batch)
+    end
+    assert_equal 1201, ids.size, "an inherited lock descriptor would let children interleave"
+    assert_equal 1201, ids.uniq.size
+  end
+
   def test_push_never_fsyncs_and_sync_does_it_from_the_worker
     spool = Kulla::Spool.new(@directory)
     spool.push(event(0)) # creates the journal header (one fsync, once)

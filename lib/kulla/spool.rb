@@ -153,21 +153,40 @@ module Kulla
     def close_inherited_files
       @open_files.each { |file| file.close unless file.closed? }
       @open_files = []
+      @append_lock&.close unless @append_lock&.closed?
+      @append_lock = nil
     end
 
     private
 
     def locked(&block)
       @mutex.synchronize do
-        open_file("append.lock") do |lock|
-          lock.flock(File::LOCK_EX)
-          begin
-            block.call
-          ensure
-            lock.flock(File::LOCK_UN)
-          end
+        lock = append_lock
+        lock.flock(File::LOCK_EX)
+        begin
+          block.call
+        ensure
+          lock.flock(File::LOCK_UN)
         end
       end
+    end
+
+    # Opened once per process rather than per record. A forked child opens its own: an
+    # inherited descriptor shares the parent's flock, so it would not exclude the parent.
+    def append_lock
+      if @append_lock.nil? || @append_lock.closed? || @append_lock_pid != Process.pid
+        flags = File::RDWR | File::CREAT
+        flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
+        @append_lock = File.open(File.join(@directory, "append.lock"), flags, 0o600)
+        restrict(@append_lock)
+        @append_lock_pid = Process.pid
+      end
+      @append_lock
+    end
+
+    # fchmod only when the mode is wrong: an unconditional chmod rewrote the inode on every record.
+    def restrict(file)
+      file.chmod(0o600) unless file.stat.mode & 0o777 == 0o600
     end
 
     def open_file(name, flags = File::RDWR | File::CREAT)
@@ -175,7 +194,7 @@ module Kulla
       file = File.open(File.join(@directory, name), flags, 0o600)
       @open_files << file
       begin
-        File.chmod(0o600, file.path) unless flags & (File::WRONLY | File::RDWR) == 0
+        restrict(file) unless flags & (File::WRONLY | File::RDWR) == 0
         yield file
       ensure
         file.close unless file.closed?

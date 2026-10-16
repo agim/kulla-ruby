@@ -6,6 +6,10 @@ module Kulla
     # Broadcast from Rails.logger, so the app's own logging is untouched.
     class Logs < ::Logger
       KEY = :kulla_logging
+      # Apps log Rack::Attack matches as "[Rack::Attack][Throttled] ip ..."; the security stream
+      # already records each one with its rule, ip and path, so under attack the log line only
+      # doubled the spool. Kept when security capture is off.
+      RACK_ATTACK = "[Rack::Attack]".freeze
 
       def self.install(client)
         return unless defined?(Rails) && Rails.logger.respond_to?(:broadcast_to)
@@ -29,6 +33,7 @@ module Kulla
         return true if severity < level || Thread.current[KEY]
         message = (message || (block_given? ? yield : progname)).to_s.strip
         return true if message.empty? || message.start_with?("[kulla]")
+        return true if message.start_with?(RACK_ATTACK) && @client.config.capture?(:security)
 
         Thread.current[KEY] = true
         level_name = %w[debug info warn error fatal fatal][severity] || "warn"

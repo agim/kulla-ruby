@@ -19,6 +19,8 @@ and :46, and so on across minutes 0 to 14. A spool past 80% of `buffer_size` or
 `spool_max_bytes` uploads before its slot (at most once a minute), so a busy app
 sends early instead of dropping its oldest records.
 INFO and higher application logs are captured without the old per-minute cap.
+Log lines starting with `[Rack::Attack]` are skipped while security capture is on,
+since the security stream already records each match with its rule, IP and path.
 Existing runtime, browser visits and query/cache/HTTP/LLM capture flags remain enabled. Runtime snapshots are collected at each upload interval.
 Explicit local capture settings and current credentials are retained; collection features are not retired.
 

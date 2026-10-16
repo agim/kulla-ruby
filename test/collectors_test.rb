@@ -135,6 +135,17 @@ class CollectorsTest < Minitest::Test
     assert_equal [ "disk low 0", "disk low 1" ], events("log").map { |e| e["message"] }
   end
 
+  def test_rack_attack_log_lines_are_left_to_the_security_stream
+    logger = Kulla::Subscribers::Logs.new(@client)
+    logger.warn("[Rack::Attack][Throttled] 203.0.113.9 GET /api/uploads")
+    logger.warn("disk low")
+    assert_equal [ "disk low" ], events("log").map { |e| e["message"] }
+
+    @config.capture = @config.capture.merge(security: false)
+    logger.warn("[Rack::Attack][Throttled] 203.0.113.9 GET /api/uploads")
+    assert events("log").any? { |e| e["message"].start_with?("[Rack::Attack]") }, "kept when security capture is off"
+  end
+
   def test_security_events_from_the_app
     Kulla.stub(:client, @client) do
       Kulla.stub(:config, @config) { Kulla.security("login_failed", ip: "203.0.113.9", path: "/session") }
