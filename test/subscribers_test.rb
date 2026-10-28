@@ -77,6 +77,19 @@ class SubscribersTest < Minitest::Test
     assert_nil Kulla::Subscribers::Security.attrs_for({ request: safelisted })
   end
 
+  def test_security_records_a_rack_attack_6_match_once
+    adapter = FakeAdapter.new
+    client = build_client(adapter)
+    request = FakeAttackRequest.new({ "rack.attack.match_type" => :blocklist, "rack.attack.matched" => "wp" }, "192.0.2.1", "/wp-login.php")
+    event = Struct.new(:payload).new({ request: request })
+    Kulla::Subscribers::Security.track(client, event) # blocklist.rack_attack
+    Kulla::Subscribers::Security.track(client, event) # the deprecated rack.attack, same request
+    other = FakeAttackRequest.new({ "rack.attack.match_type" => :blocklist, "rack.attack.matched" => "wp" }, "192.0.2.1", "/wp-login.php")
+    Kulla::Subscribers::Security.track(client, Struct.new(:payload).new({ request: other }))
+    client.flush
+    assert_equal 2, adapter.events.count { |e| e["stream"] == "security" }
+  end
+
   def test_structured_events
     adapter = FakeAdapter.new
     client = build_client(adapter, filter_parameters: [ :card ])
