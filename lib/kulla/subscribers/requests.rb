@@ -70,14 +70,26 @@ module Kulla
         nil
       end
 
+      # No status and no exception means the action never finished normally: a throw such as
+      # Devise's `throw :warden` for a signed-out visitor. Rails' own log line asks the
+      # controller (Devise fills in 401 there), so do the same on a copy; never guess 500.
       def self.status(payload)
         return payload[:status].to_i if payload[:status]
-        return 500 unless payload[:exception]
+        return logged_status(payload) unless payload[:exception]
         if defined?(ActionDispatch::ExceptionWrapper)
           ActionDispatch::ExceptionWrapper.status_code_for_exception(payload[:exception].first)
         else
           500
         end
+      end
+
+      def self.logged_status(payload)
+        return unless defined?(ActionController::Base) && ActionController::Base.respond_to?(:log_process_action)
+        copy = payload.dup
+        ActionController::Base.log_process_action(copy)
+        copy[:status]&.to_i
+      rescue StandardError
+        nil
       end
 
       def self.header(request, headers, name)

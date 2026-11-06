@@ -13,14 +13,28 @@ module Kulla
         end
       end
 
+      # Rack::Attack 6+ sends every match twice: "<type>.rack_attack" and the deprecated
+      # "rack.attack". Both carry the same request, so the request's env marks it recorded.
+      SEEN = "kulla.security_recorded".freeze
+
       def self.track(client, event)
         return unless client.config.capture?(:security)
         attrs = attrs_for(event.payload)
         return if attrs.nil?
+        return if first_time?(event.payload) == false
 
         client.track("security", attrs, level: :warn, scrub: false)
       rescue StandardError => e
         Kulla.log("security subscriber failed: #{e.class}: #{e.message}")
+      end
+
+      # False when this request was already recorded; nil when there is no env to mark.
+      def self.first_time?(payload)
+        request = payload.is_a?(Hash) ? payload[:request] : payload
+        env = request.env if request.respond_to?(:env)
+        return nil unless env.is_a?(Hash)
+        return false if env[SEEN]
+        env[SEEN] = true
       end
 
       # Rack::Attack 6+ sends { request: req }; 5.x sent the request itself as the payload.
