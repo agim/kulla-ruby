@@ -28,6 +28,20 @@ class SubscribersTest < Minitest::Test
                    "ua" => "Mozilla/5.0", "country" => "XK", "bot" => false }, attrs)
   end
 
+  # Devise halts a signed-out request with `throw :warden`: Rails sets no status and no exception,
+  # and Devise adds 401 only in log_process_action. That used to be recorded as a 500.
+  def test_a_request_halted_without_a_status_takes_the_controllers_logged_status
+    devise = Class.new { def self.log_process_action(payload) = (payload[:status] ||= 401 unless payload[:exception]) }
+    payload = request_payload.merge(status: nil)
+    Object.stub_const_for_test(:ActionController, Module.new.tap { |m| m.const_set(:Base, devise) }) do
+      attrs, = Kulla::Subscribers::Requests.attrs_for(payload, 1.0)
+      assert_equal 401, attrs["status"]
+      assert_nil payload[:status], "the app's own payload is left as Rails gave it"
+    end
+    attrs, = Kulla::Subscribers::Requests.attrs_for(payload, 1.0)
+    refute attrs.key?("status"), "an unknown status is left out, never guessed as 500"
+  end
+
   def test_request_falls_back_to_raw_path_and_500_on_exception
     payload = request_payload(pattern: nil).merge(status: nil, exception: [ "RuntimeError", "boom" ])
     attrs, = Kulla::Subscribers::Requests.attrs_for(payload, 1.0)
